@@ -1,3 +1,4 @@
+pub mod platform;
 pub mod window;
 
 #[cfg(test)]
