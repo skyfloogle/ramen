@@ -8,4 +8,5 @@ pub(crate) use imp::spawn_window;
 pub(crate) type WindowRepr = imp::WindowImpl;
 
 // Bonus
-// ...
+pub use ffi::{HINSTANCE, HMONITOR, HWND};
+pub use imp::this_hinstance;
