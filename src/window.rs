@@ -11,9 +11,10 @@ pub struct Window(imp::WindowRepr);
 /// Builder for creating [`Window`] instances.
 ///
 /// To create a builder, use [`Window::builder`].
+#[derive(Clone)]
 pub struct WindowBuilder {
-    class_name: MaybeArc<str>,
-    title: MaybeArc<str>,
+    pub(crate) class_name: MaybeArc<str>,
+    pub(crate) title: MaybeArc<str>,
 }
 
 impl Window {
@@ -33,7 +34,9 @@ impl WindowBuilder {
     pub fn build(&self) -> Result<Window, Error> {
         imp::spawn_window(self).map(Window)
     }
+}
 
+impl WindowBuilder {
     pub fn class_name<T>(&mut self, class_name: T) -> &mut Self
     where
         T: Into<Cow<'static, str>>,
