@@ -1,6 +1,6 @@
 //! Win32-specific implementations and API extensions.
 
-pub(crate) mod api;
+pub(crate) mod ffi;
 pub(crate) mod imp;
 
 // Required re-exports
