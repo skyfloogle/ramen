@@ -5,3 +5,10 @@ authors = ["viri <hi@viri.moe>"]
 edition = "2018"
 
 [dependencies]
+
+[features]
+default = []
+nightly-docs = []
+
+[package.metadata.docs.rs]
+features = ["nightly-docs"]

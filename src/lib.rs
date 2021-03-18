@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "nightly-docs", feature(doc_cfg))]
+
 pub mod platform;
 pub mod window;
 
