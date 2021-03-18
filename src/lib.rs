@@ -6,6 +6,8 @@ pub mod error;
 pub mod platform;
 pub mod window;
 
+pub(crate) mod util;
+
 #[cfg(test)]
 mod tests {
     #[test]
