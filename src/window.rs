@@ -1,6 +1,7 @@
 //! yeah
 
-use crate::{error::Error, platform::imp};
+use crate::{error::Error, platform::imp, util::MaybeArc};
+use std::borrow::Cow;
 
 /// Represents an open window. Dropping it closes the window.
 /// 
@@ -11,7 +12,7 @@ pub struct Window(imp::WindowRepr);
 ///
 /// To create a builder, use [`Window::builder`].
 pub struct WindowBuilder {
-
+    title: MaybeArc<str>,
 }
 
 impl Window {
@@ -27,5 +28,16 @@ impl WindowBuilder {
 
     pub fn build(&self) -> Result<Window, Error> {
         imp::spawn_window(self).map(Window)
+    }
+
+    pub fn title<T>(&mut self, title: T) -> &mut Self
+    where
+        T: Into<Cow<'static, str>>,
+    {
+        self.title = match title.into() {
+            Cow::Borrowed(x) => x.into(),
+            Cow::Owned(x) => MaybeArc::Dynamic(x.into()),
+        };
+        self
     }
 }
