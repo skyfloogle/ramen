@@ -1,10 +1,10 @@
 use crate::{
     error::Error,
     platform::win32::ffi,
-    util::LazyCell,
+    util::{sync::{self, Condvar, Mutex}, LazyCell},
     window::{self, WindowBuilder},
 };
-use std::{cell::UnsafeCell, mem, ptr, slice, sync::Mutex, thread};
+use std::{cell::UnsafeCell, mem, ptr, slice, sync::Arc, thread};
 
 // (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
 // When MS went from 32 to 64 bit, they realized how big of a mistake this was,
@@ -166,25 +166,22 @@ impl window::Style {
 
 /// Implementation container for `Window`
 pub struct WindowImpl {
-    // ...
+    thread: Option<thread::JoinHandle<()>>,
+    user: *mut WindowImplData, // 'thread
 }
+
+unsafe impl Send for WindowImpl {}
+unsafe impl Sync for WindowImpl {}
 
 /// Info struct for `WM_(NC)CREATE`
 pub struct WindowImplCreateParams {
-    user_data: *mut WindowImplData,
+    error: Option<Error>,
+    user: *mut WindowImplData,
 }
 
 /// User data structure
 pub struct WindowImplData {
     // ...
-}
-
-impl Default for WindowImplData {
-    fn default() -> Self {
-        Self {
-            // ...
-        }
-    }
 }
 
 /// To avoid two threads trying to register a window class at the same time,
@@ -193,16 +190,25 @@ static CLASS_REGISTRY_LOCK: LazyCell<Mutex<()>> = LazyCell::new(|| Mutex::new(()
 
 pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
     let builder = builder.clone();
+
+    // Convert class name & title to `WCHAR` string for Win32
+    // This and the `recv` Arc are the only allocations, none in the thread
+    let mut class_name_buf = Vec::new();
+    let mut title_buf = Vec::new();
+    let class_name = str_to_wstr(builder.class_name.as_ref(), &mut class_name_buf) as usize;
+    let title = str_to_wstr(builder.title.as_ref(), &mut title_buf) as usize;
+    let recv = Arc::new((Mutex::new(Option::<Result<WindowImpl, Error>>::None), Condvar::new()));
+    let recv2 = Arc::clone(&recv); // remote thread's handle object
+
     let thread = thread::spawn(move || unsafe {
-        // Convert class name & title to `WCHAR` string for Win32
-        let mut class_name_buf = Vec::new();
-        let class_name = str_to_wstr(builder.class_name.as_ref(), &mut class_name_buf);
-        let mut title_buf = Vec::new();
-        let title = str_to_wstr(builder.title.as_ref(), &mut title_buf);
+        // HACK: Since Rust doesn't trust us to share pointers, we move a `usize`
+        // There are cleaner fixes for this, but this works just fine
+        let class_name = class_name as *const ffi::WCHAR;
+        let title = title as *const ffi::WCHAR;
 
         // Create the window class if it doesn't exist yet
         let mut class_created_this_thread = false;
-        let class_registry_lock = CLASS_REGISTRY_LOCK.lock().unwrap();
+        let class_registry_lock = sync::mutex_lock(CLASS_REGISTRY_LOCK.get());
         let mut class_info = mem::MaybeUninit::<ffi::WNDCLASSEXW>::uninit();
         (*class_info.as_mut_ptr()).cbSize = mem::size_of_val(&class_info) as ffi::DWORD;
         if ffi::GetClassInfoExW(this_hinstance(), class_name, class_info.as_mut_ptr()) == 0 {
@@ -237,11 +243,16 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         let style_ex = builder.style.dword_style_ex();
         let (width, height) = (1280, 720);
         let (pos_x, pos_y) = (ffi::CW_USEDEFAULT, ffi::CW_USEDEFAULT);
-        let user_data: Box<UnsafeCell<WindowImplData>> = Default::default();
+
+        // Special
+        let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
+            // ...
+        });
 
         // A user pointer is supplied for `WM_NCCREATE` & `WM_CREATE` as lpParam
-        let create_params = WindowImplCreateParams {
-            user_data: user_data.get(),
+        let mut create_params = WindowImplCreateParams {
+            error: None,
+            user: user_data.get(),
         };
         let hwnd = ffi::CreateWindowExW(
             style_ex,
@@ -255,19 +266,47 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             ptr::null_mut(), // parent hwnd
             ptr::null_mut(), // menu handle
             this_hinstance(),
-            (&create_params) as *const _ as ffi::LPVOID,
+            (&mut create_params) as *mut _ as ffi::LPVOID,
         );
-        println!("RESULT: {:?}", hwnd);
 
-        // ... (Create)
+        if hwnd.is_null() {
+            if create_params.error.is_none() {
+                // TODO: Push create failure
+            }
+        }
 
+        let (mutex, condvar) = &*recv2;
+        let mut lock = sync::mutex_lock(&mutex);
+        if let Some(err) = create_params.error.take() {
+            *lock = Some(Err(err));
+            return // early return (dropped by caller)
+        } else {
+            *lock = Some(Ok(WindowImpl {
+                thread: None, // filled in by caller
+                user: user_data.get(),
+            }));
+        }
+        sync::condvar_notify1(&condvar);
+        mem::drop(lock);
+        
         // No longer needed, free memory
         mem::drop(builder);
-        mem::drop(class_name_buf);
-        mem::drop(title_buf);
+        mem::drop(recv2);
     });
-    loop {}
-    todo!()
+
+    // Wait until the thread is done creating the window or notifying us why it couldn't do that
+    let (mutex, condvar) = &*recv;
+    let mut lock = sync::mutex_lock(&mutex);
+    loop {
+        if let Some(result) = (&mut *lock).take() {
+            break result.map(|mut window| {
+                window.thread = Some(thread);
+                window
+            })
+        } else {
+            sync::condvar_wait(&condvar, &mut lock);
+        }
+    }
 }
 
 unsafe extern "system" fn window_proc(
