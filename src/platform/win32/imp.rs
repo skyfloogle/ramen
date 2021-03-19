@@ -2,10 +2,57 @@ use crate::{
     error::Error,
     platform::win32::ffi,
     util::LazyCell,
-    window::WindowBuilder,
+    window::{self, WindowBuilder},
 };
-use std::{mem, ptr, slice, sync::Mutex, thread};
+use std::{cell::UnsafeCell, mem, ptr, slice, sync::Mutex, thread};
 
+// (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
+// When MS went from 32 to 64 bit, they realized how big of a mistake this was,
+// seeing as some of those values need to be as big as a pointer is (like size_t).
+// Unfortunately they exported the 32-bit ones on 64-bit with mismatching signatures.
+// These functions wrap both of those function sets to `usize`, which matches on 32 & 64 bit.
+#[cfg(target_pointer_width = "32")]
+#[inline]
+pub unsafe fn get_class_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
+    ffi::GetClassLongW(hwnd, offset) as usize
+}
+#[cfg(target_pointer_width = "64")]
+#[inline]
+pub unsafe fn get_class_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
+    ffi::GetClassLongPtrW(hwnd, offset) as usize
+}
+#[cfg(target_pointer_width = "32")]
+#[inline]
+pub unsafe fn set_class_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
+    ffi::SetClassLongW(hwnd, offset, data as ffi::LONG) as usize
+}
+#[cfg(target_pointer_width = "64")]
+#[inline]
+pub unsafe fn set_class_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
+    ffi::SetClassLongPtrW(hwnd, offset, data as ffi::LONG_PTR) as usize
+}
+#[cfg(target_pointer_width = "32")]
+#[inline]
+pub unsafe fn get_window_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
+    ffi::GetWindowLongW(hwnd, offset) as usize
+}
+#[cfg(target_pointer_width = "64")]
+#[inline]
+pub unsafe fn get_window_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
+    ffi::GetWindowLongPtrW(hwnd, offset) as usize
+}
+#[cfg(target_pointer_width = "32")]
+#[inline]
+pub unsafe fn set_window_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
+    ffi::SetWindowLongW(hwnd, offset, data as ffi::LONG) as usize
+}
+#[cfg(target_pointer_width = "64")]
+#[inline]
+pub unsafe fn set_window_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
+    ffi::SetWindowLongPtrW(hwnd, offset, data as ffi::LONG_PTR) as usize
+}
+
+/// Converts a &str to an LPCWSTR-compatible string array.
 fn str_to_wstr(src: &str, buffer: &mut Vec<ffi::WCHAR>) -> ffi::LPCWSTR {
     // NOTE: Yes, indeed, `std::os::windows::ffi::OsStr(ing)ext` does exist in the standard library,
     // but it requires you to fit your data in the OsStr(ing) model and it's not hyper optimized
@@ -65,8 +112,87 @@ pub fn this_hinstance() -> ffi::HINSTANCE {
     (unsafe { &__ImageBase }) as *const [u8; 64] as ffi::HINSTANCE
 }
 
+impl window::Style {
+    /// Gets this style as a bitfield. Note that it does not include the close button.
+    /// The close button is a menu property, not a window style.
+    pub(crate) fn dword_style(&self) -> ffi::DWORD {
+        let mut style = 0;
+
+        if self.borderless {
+            // TODO: Why does this just not work without THICKFRAME? Borderless is dumb.
+            style |= ffi::WS_POPUP | ffi::WS_THICKFRAME;
+        } else {
+            style |= ffi::WS_OVERLAPPED | ffi::WS_BORDER | ffi::WS_CAPTION;
+        }
+
+        if self.resizable {
+            style |= ffi::WS_THICKFRAME;
+        }
+
+        if self.visible {
+            style |= ffi::WS_VISIBLE;
+        }
+
+        if let Some(controls) = &self.controls {
+            if controls.minimize {
+                style |= ffi::WS_MINIMIZEBOX;
+            }
+            if controls.maximize {
+                style |= ffi::WS_MAXIMIZEBOX;
+            }
+            style |= ffi::WS_SYSMENU;
+        }
+
+        style
+    }
+
+    /// Gets the extended window style.
+    pub(crate) fn dword_style_ex(&self) -> ffi::DWORD {
+        let mut style = 0;
+
+        if self.rtl_layout {
+            style |= ffi::WS_EX_LAYOUTRTL;
+        }
+
+        if self.tool_window {
+            style |= ffi::WS_EX_TOOLWINDOW;
+        }
+
+        style
+    }
+
+    /// Sets both styles for target window handle.
+    pub(crate) fn set_for(&self, hwnd: ffi::HWND) {
+        let style = self.dword_style();
+        let style_ex = self.dword_style_ex();
+        unsafe {
+            let _ = set_window_data(hwnd, ffi::GWL_STYLE, style as usize);
+            let _ = set_window_data(hwnd, ffi::GWL_EXSTYLE, style_ex as usize);
+        }
+    }
+}
+
+/// Implementation container for `Window`
 pub struct WindowImpl {
     // ...
+}
+
+/// Info struct for `WM_(NC)CREATE`
+pub struct WindowImplCreateParams {
+    user_data: *mut WindowImplData,
+}
+
+/// User data structure
+pub struct WindowImplData {
+    // ...
+}
+
+impl Default for WindowImplData {
+    fn default() -> Self {
+        Self {
+            // ...
+        }
+    }
 }
 
 /// To avoid two threads trying to register a window class at the same time,
@@ -115,13 +241,41 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         }
         mem::drop(class_registry_lock);
 
+        let style = builder.style.dword_style();
+        let style_ex = builder.style.dword_style_ex();
+        let (width, height) = (1280, 720);
+        let (pos_x, pos_y) = (ffi::CW_USEDEFAULT, ffi::CW_USEDEFAULT);
+        let user_data: Box<UnsafeCell<WindowImplData>> = Default::default();
+
+        // A user pointer is supplied for `WM_NCCREATE` & `WM_CREATE` as lpParam
+        let create_params = WindowImplCreateParams {
+            user_data: user_data.get(),
+        };
+        let hwnd = ffi::CreateWindowExW(
+            style_ex,
+            class_name,
+            title,
+            style,
+            pos_x,
+            pos_y,
+            width,
+            height,
+            ptr::null_mut(), // parent hwnd
+            ptr::null_mut(), // menu handle
+            this_hinstance(),
+            (&create_params) as *const _ as ffi::LPVOID,
+        );
+        println!("RESULT: {:?}", hwnd);
+
         // ... (Create)
+        loop {}
 
         // No longer needed, free memory
         mem::drop(builder);
         mem::drop(class_name_buf);
         mem::drop(title_buf);
     });
+    loop{}
     todo!()
 }
 
@@ -131,5 +285,5 @@ unsafe extern "system" fn window_proc(
     wparam: ffi::WPARAM,
     lparam: ffi::LPARAM,
 ) -> ffi::LRESULT {
-    0
+    ffi::DefWindowProcW(hwnd, msg, wparam, lparam)
 }
