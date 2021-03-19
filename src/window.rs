@@ -3,6 +3,42 @@
 use crate::{error::Error, platform::imp, util::MaybeArc};
 use std::borrow::Cow;
 
+/// Represents the availability of the minimize, maximize, and close buttons on a [`Window`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Controls {
+    pub minimize: bool,
+    pub maximize: bool,
+    pub close: bool,
+}
+
+impl Controls {
+    /// Creates window controls from the provided values.
+    pub const fn new(minimize: bool, maximize: bool, close: bool) -> Self {
+        Controls {
+            minimize,
+            maximize,
+            close,
+        }
+    }
+
+    /// Creates window controls with all 3 buttons enabled.
+    pub const fn enabled() -> Self {
+        Self::new(true, true, true)
+    }
+
+    /// Creates window controls with the minimize & close buttons available.
+    pub const fn no_maximize() -> Self {
+        Self::new(true, false, true)
+    }
+}
+
+impl Default for Controls {
+    /// Default trait implementation, same as [`WindowControls::new`].
+    fn default() -> Self {
+        Self::enabled()
+    }
+}
+
 /// Represents an open window. Dropping it closes the window.
 /// 
 /// To instantiate windows, use a [`builder`](Self::builder).
