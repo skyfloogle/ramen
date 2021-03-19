@@ -5,6 +5,19 @@ use std::{
     sync::{Arc, Once},
 };
 
+pub fn str_has_nulls(s: &str) -> bool {
+    s.bytes().any(|b| b == 0x00)
+}
+
+pub fn str_sweep_nulls(s: &mut String) {
+    // SAFETY: 0x00 is a one-byte null and is safe to swap with 0x20
+    for byte in unsafe { s.as_mut_vec().iter_mut() } {
+        if *byte == 0x00 {
+            *byte = b' ';
+        }
+    }
+}
+
 /// Minimal lazily initialized type, similar to the one in `once_cell`.
 ///
 /// Thread safe initialization, immutable-only access.
@@ -77,4 +90,50 @@ impl<T: 'static + ?Sized> Clone for MaybeArc<T> {
             Self::Dynamic(x) => Self::Dynamic(Arc::clone(x)),
         }
     }   
+}
+
+/// Wrapper for working with both `std` and `parking_lot`.
+/// None of these functions should panic when used correctly as they're used in FFI.
+#[cfg(not(feature = "parking-lot"))]
+pub(crate) mod sync {
+    pub use std::sync::{Condvar, Mutex, MutexGuard};
+    use std::ptr;
+
+    #[inline]
+    pub fn condvar_notify1(cvar: &Condvar) {
+        cvar.notify_one();
+    }
+
+    pub fn condvar_wait<T>(cvar: &Condvar, guard: &mut MutexGuard<T>) {
+        // The signature in `std` is quite terrible and CONSUMES the guard
+        // HACK: We "move it out" for the duration of the wait
+        unsafe {
+            let guard_copy = ptr::read(guard);
+            let result = cvar.wait(guard_copy).expect("cvar mutex poisoned (this is a bug)");
+            ptr::write(guard, result);
+        }
+    }
+
+    pub fn mutex_lock<T>(mtx: &Mutex<T>) -> MutexGuard<T> {
+        mtx.lock().expect("mutex poisoned (this is a bug)")
+    }
+}
+#[cfg(feature = "parking-lot")]
+pub(crate) mod sync {
+    pub use parking_lot::{Condvar, Mutex, MutexGuard};
+
+    #[inline]
+    pub fn condvar_notify1(cvar: &Condvar) {
+        let _ = cvar.notify_one();
+    }
+
+    #[inline]
+    pub fn condvar_wait<T>(cvar: &Condvar, guard: &mut MutexGuard<T>) {
+        cvar.wait(guard);
+    }
+
+    #[inline]
+    pub fn mutex_lock<T>(mtx: &Mutex<T>) -> MutexGuard<T> {
+        mtx.lock()
+    }
 }
