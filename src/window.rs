@@ -1,6 +1,6 @@
 //! yeah
 
-use crate::{error::Error, platform::imp, util::MaybeArc};
+use crate::{error::Error, platform::imp, util::{self, MaybeArc}};
 use std::borrow::Cow;
 
 /// Represents the availability of the minimize, maximize, and close buttons on a [`Window`].
@@ -104,7 +104,13 @@ impl WindowBuilder {
     where
         T: Into<Cow<'static, str>>,
     {
-        self.class_name = match class_name.into() {
+        let mut class_name = class_name.into();
+        if util::str_has_nulls(class_name.as_ref()) {
+            let mut dirty = class_name.into_owned();
+            util::str_sweep_nulls(&mut dirty);
+            class_name = Cow::Owned(dirty);
+        }
+        self.class_name = match class_name {
             Cow::Borrowed(b) => MaybeArc::Static(b),
             Cow::Owned(o) => MaybeArc::Dynamic(o.into()),
         };
@@ -156,7 +162,13 @@ impl WindowBuilder {
     where
         T: Into<Cow<'static, str>>,
     {
-        self.title = match title.into() {
+        let mut title = title.into();
+        if util::str_has_nulls(title.as_ref()) {
+            let mut dirty = title.into_owned();
+            util::str_sweep_nulls(&mut dirty);
+            title = Cow::Owned(dirty);
+        }
+        self.title = match title {
             Cow::Borrowed(b) => MaybeArc::Static(b),
             Cow::Owned(o) => MaybeArc::Dynamic(o.into()),
         };

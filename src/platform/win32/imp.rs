@@ -85,14 +85,6 @@ fn str_to_wstr(src: &str, buffer: &mut Vec<ffi::WCHAR>) -> ffi::LPCWSTR {
             buffer.as_mut_ptr(), req_buffer_size as ffi::c_int,
         ) as usize;
 
-        // Filter nulls, as Rust allows them in &str
-        // TODO: Does this mess up multi-byte UTF-16?
-        for x in slice::from_raw_parts_mut(buffer.as_mut_ptr(), chars_written) {
-            if *x == 0x00 {
-                *x = b' ' as ffi::WCHAR; // 0x00 => Space
-            }
-        }
-
         // Add null terminator & yield
         *buffer.as_mut_ptr().add(chars_written) = 0x00;
         buffer.set_len(req_buffer_size);
@@ -268,14 +260,13 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         println!("RESULT: {:?}", hwnd);
 
         // ... (Create)
-        loop {}
 
         // No longer needed, free memory
         mem::drop(builder);
         mem::drop(class_name_buf);
         mem::drop(title_buf);
     });
-    loop{}
+    loop {}
     todo!()
 }
 
