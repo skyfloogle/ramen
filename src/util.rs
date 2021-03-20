@@ -1,6 +1,7 @@
 use std::{
     cell::UnsafeCell,
     clone::Clone,
+    mem::MaybeUninit,
     ops::Deref, ptr,
     sync::{Arc, Once},
 };
@@ -14,6 +15,64 @@ pub fn str_sweep_nulls(s: &mut String) {
     for byte in unsafe { s.as_mut_vec().iter_mut() } {
         if *byte == 0x00 {
             *byte = b' ';
+        }
+    }
+}
+
+pub struct FixedVec<T, const N: usize> {
+    array: MaybeUninit<[T; N]>,
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> FixedVec<T, N> {
+    pub fn clear(&mut self) {
+        for el in self.slice_mut() {
+            unsafe {
+                ptr::drop_in_place(el);
+            }
+        }
+        self.len = 0;
+    }
+
+    pub fn new() -> Self {
+        Self {
+            array: MaybeUninit::uninit(),
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, item: &T) -> bool {
+        self.push_many(unsafe {
+            std::slice::from_raw_parts(item, 1)
+        })
+    }
+
+    pub fn push_many(&mut self, items: &[T]) -> bool {
+        if self.len + items.len() <= N {
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    items.as_ptr(),
+                    (&mut *self.array.as_mut_ptr())
+                        .get_unchecked_mut(self.len),
+                        items.len(),
+                );
+            }
+            self.len += items.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn slice(&self) -> &[T] {
+        unsafe {
+            (&*self.array.as_ptr()).get_unchecked(..self.len)
+        }
+    }
+
+    pub fn slice_mut(&mut self) -> &mut [T] {
+        unsafe {
+            (&mut *self.array.as_mut_ptr()).get_unchecked_mut(..self.len)
         }
     }
 }
