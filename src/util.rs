@@ -54,7 +54,7 @@ impl<T: Copy, const N: usize> FixedVec<T, N> {
                     items.as_ptr(),
                     (&mut *self.array.as_mut_ptr())
                         .get_unchecked_mut(self.len),
-                        items.len(),
+                    items.len(),
                 );
             }
             self.len += items.len();
