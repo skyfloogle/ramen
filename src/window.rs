@@ -1,6 +1,6 @@
 //! yeah
 
-use crate::{error::Error, platform::imp, util::{self, MaybeArc}};
+use crate::{error::Error, event::Event, platform::imp, util::{self, MaybeArc}};
 use std::borrow::Cow;
 
 /// Represents the availability of the minimize, maximize, and close buttons on a [`Window`].
@@ -57,6 +57,16 @@ pub struct WindowBuilder {
 impl Window {
     pub const fn builder() -> WindowBuilder {
         WindowBuilder::new()
+    }
+
+    #[inline]
+    pub fn events(&self) -> &[Event] {
+        self.0.events()
+    }
+
+    #[inline]
+    pub fn swap_events(&mut self) {
+        self.0.swap_events()
     }
 }
 

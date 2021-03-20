@@ -1,10 +1,16 @@
 use crate::{
     error::Error,
-    platform::win32::ffi,
-    util::{sync::{self, Condvar, Mutex}, LazyCell},
+    event::Event,
+    util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
-use std::{cell::UnsafeCell, mem, ptr, slice, sync::Arc, thread};
+use std::{cell::UnsafeCell, mem, ptr, slice, sync::{atomic, Arc}, thread};
+
+// TODO: Maybe deglob
+use crate::platform::win32::ffi::*;
+
+// TODO: Measure this
+const MAX_EVENTS_PER_SWAP: usize = 4096;
 
 // (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
 // When MS went from 32 to 64 bit, they realized how big of a mistake this was,
@@ -13,63 +19,63 @@ use std::{cell::UnsafeCell, mem, ptr, slice, sync::Arc, thread};
 // These functions wrap both of those function sets to `usize`, which matches on 32 & 64 bit.
 #[cfg(target_pointer_width = "32")]
 #[inline]
-pub unsafe fn get_class_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
-    ffi::GetClassLongW(hwnd, offset) as usize
+pub unsafe fn get_class_data(hwnd: HWND, offset: c_int) -> usize {
+    GetClassLongW(hwnd, offset) as usize
 }
 #[cfg(target_pointer_width = "64")]
 #[inline]
-pub unsafe fn get_class_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
-    ffi::GetClassLongPtrW(hwnd, offset) as usize
+pub unsafe fn get_class_data(hwnd: HWND, offset: c_int) -> usize {
+    GetClassLongPtrW(hwnd, offset) as usize
 }
 #[cfg(target_pointer_width = "32")]
 #[inline]
-pub unsafe fn set_class_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
-    ffi::SetClassLongW(hwnd, offset, data as ffi::LONG) as usize
+pub unsafe fn set_class_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
+    SetClassLongW(hwnd, offset, data as LONG) as usize
 }
 #[cfg(target_pointer_width = "64")]
 #[inline]
-pub unsafe fn set_class_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
-    ffi::SetClassLongPtrW(hwnd, offset, data as ffi::LONG_PTR) as usize
+pub unsafe fn set_class_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
+    SetClassLongPtrW(hwnd, offset, data as LONG_PTR) as usize
 }
 #[cfg(target_pointer_width = "32")]
 #[inline]
-pub unsafe fn get_window_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
-    ffi::GetWindowLongW(hwnd, offset) as usize
+pub unsafe fn get_window_data(hwnd: HWND, offset: c_int) -> usize {
+    GetWindowLongW(hwnd, offset) as usize
 }
 #[cfg(target_pointer_width = "64")]
 #[inline]
-pub unsafe fn get_window_data(hwnd: ffi::HWND, offset: ffi::c_int) -> usize {
-    ffi::GetWindowLongPtrW(hwnd, offset) as usize
+pub unsafe fn get_window_data(hwnd: HWND, offset: c_int) -> usize {
+    GetWindowLongPtrW(hwnd, offset) as usize
 }
 #[cfg(target_pointer_width = "32")]
 #[inline]
-pub unsafe fn set_window_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
-    ffi::SetWindowLongW(hwnd, offset, data as ffi::LONG) as usize
+pub unsafe fn set_window_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
+    SetWindowLongW(hwnd, offset, data as LONG) as usize
 }
 #[cfg(target_pointer_width = "64")]
 #[inline]
-pub unsafe fn set_window_data(hwnd: ffi::HWND, offset: ffi::c_int, data: usize) -> usize {
-    ffi::SetWindowLongPtrW(hwnd, offset, data as ffi::LONG_PTR) as usize
+pub unsafe fn set_window_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
+    SetWindowLongPtrW(hwnd, offset, data as LONG_PTR) as usize
 }
 
 /// Converts a &str to an LPCWSTR-compatible string array.
-fn str_to_wstr(src: &str, buffer: &mut Vec<ffi::WCHAR>) -> ffi::LPCWSTR {
-    // NOTE: Yes, indeed, `std::os::windows::ffi::OsStr(ing)ext` does exist in the standard library,
+fn str_to_wstr(src: &str, buffer: &mut Vec<WCHAR>) -> LPCWSTR {
+    // NOTE: Yes, indeed, `std::os::windows::OsStr(ing)ext` does exist in the standard library,
     // but it requires you to fit your data in the OsStr(ing) model and it's not hyper optimized
     // unlike mb2wc with handwritten SSE (allegedly), alongside being the native conversion function
 
     // MultiByteToWideChar can't actually handle 0 length because 0 return means error
-    if src.is_empty() || src.len() > ffi::c_int::max_value() as usize {
+    if src.is_empty() || src.len() > c_int::max_value() as usize {
         return [0x00].as_ptr()
     }
 
     unsafe {
-        let str_ptr: ffi::LPCSTR = src.as_ptr().cast();
-        let str_len = src.len() as ffi::c_int;
+        let str_ptr: LPCSTR = src.as_ptr().cast();
+        let str_len = src.len() as c_int;
 
         // Calculate buffer size
-        let req_buffer_size = ffi::MultiByteToWideChar(
-            ffi::CP_UTF8, 0,
+        let req_buffer_size = MultiByteToWideChar(
+            CP_UTF8, 0,
             str_ptr, str_len,
             ptr::null_mut(), 0, // `lpWideCharStr == NULL` means query size
         ) as usize + 1; // +1 for null terminator
@@ -79,10 +85,10 @@ fn str_to_wstr(src: &str, buffer: &mut Vec<ffi::WCHAR>) -> ffi::LPCWSTR {
         buffer.reserve(req_buffer_size);
 
         // Write to our buffer
-        let chars_written = ffi::MultiByteToWideChar(
-            ffi::CP_UTF8, 0,
+        let chars_written = MultiByteToWideChar(
+            CP_UTF8, 0,
             str_ptr, str_len,
-            buffer.as_mut_ptr(), req_buffer_size as ffi::c_int,
+            buffer.as_mut_ptr(), req_buffer_size as c_int,
         ) as usize;
 
         // Add null terminator & yield
@@ -94,72 +100,72 @@ fn str_to_wstr(src: &str, buffer: &mut Vec<ffi::WCHAR>) -> ffi::LPCWSTR {
 
 /// Retrieves the base module HINSTANCE.
 #[inline]
-pub fn this_hinstance() -> ffi::HINSTANCE {
+pub fn this_hinstance() -> HINSTANCE {
     extern "system" {
         // Microsoft's linkers provide a static HINSTANCE to not have to query it at runtime.
         // Source: https://devblogs.microsoft.com/oldnewthing/20041025-00/?p=37483
         // (I love you Raymond Chen)
         static __ImageBase: [u8; 64];
     }
-    (unsafe { &__ImageBase }) as *const [u8; 64] as ffi::HINSTANCE
+    (unsafe { &__ImageBase }) as *const [u8; 64] as HINSTANCE
 }
 
 impl window::Style {
     /// Gets this style as a bitfield. Note that it does not include the close button.
     /// The close button is a menu property, not a window style.
-    pub(crate) fn dword_style(&self) -> ffi::DWORD {
+    pub(crate) fn dword_style(&self) -> DWORD {
         let mut style = 0;
 
         if self.borderless {
             // TODO: Why does this just not work without THICKFRAME? Borderless is dumb.
-            style |= ffi::WS_POPUP | ffi::WS_THICKFRAME;
+            style |= WS_POPUP | WS_THICKFRAME;
         } else {
-            style |= ffi::WS_OVERLAPPED | ffi::WS_BORDER | ffi::WS_CAPTION;
+            style |= WS_OVERLAPPED | WS_BORDER | WS_CAPTION;
         }
 
         if self.resizable {
-            style |= ffi::WS_THICKFRAME;
+            style |= WS_THICKFRAME;
         }
 
         if self.visible {
-            style |= ffi::WS_VISIBLE;
+            style |= WS_VISIBLE;
         }
 
         if let Some(controls) = &self.controls {
             if controls.minimize {
-                style |= ffi::WS_MINIMIZEBOX;
+                style |= WS_MINIMIZEBOX;
             }
             if controls.maximize {
-                style |= ffi::WS_MAXIMIZEBOX;
+                style |= WS_MAXIMIZEBOX;
             }
-            style |= ffi::WS_SYSMENU;
+            style |= WS_SYSMENU;
         }
 
         style
     }
 
     /// Gets the extended window style.
-    pub(crate) fn dword_style_ex(&self) -> ffi::DWORD {
+    pub(crate) fn dword_style_ex(&self) -> DWORD {
         let mut style = 0;
 
         if self.rtl_layout {
-            style |= ffi::WS_EX_LAYOUTRTL;
+            style |= WS_EX_LAYOUTRTL;
         }
 
         if self.tool_window {
-            style |= ffi::WS_EX_TOOLWINDOW;
+            style |= WS_EX_TOOLWINDOW;
         }
 
         style
     }
 
     /// Sets both styles for target window handle.
-    pub(crate) fn set_for(&self, hwnd: ffi::HWND) {
+    pub(crate) fn set_for(&self, hwnd: HWND) {
         let style = self.dword_style();
         let style_ex = self.dword_style_ex();
         unsafe {
-            let _ = set_window_data(hwnd, ffi::GWL_STYLE, style as usize);
-            let _ = set_window_data(hwnd, ffi::GWL_EXSTYLE, style_ex as usize);
+            let _ = set_window_data(hwnd, GWL_STYLE, style as usize);
+            let _ = set_window_data(hwnd, GWL_EXSTYLE, style_ex as usize);
         }
     }
 }
@@ -181,7 +187,15 @@ pub struct WindowImplCreateParams {
 
 /// User data structure
 pub struct WindowImplData {
-    // ...
+    // Prevent external close attempts
+    destroy_flag: atomic::AtomicBool,
+
+    // Read `Self::push_event`
+    ev_buf_sync: Mutex<bool>,
+    ev_buf_ping: Condvar,
+    ev_buf_is_primary: bool,
+    ev_buf_primary: FixedVec<Event, MAX_EVENTS_PER_SWAP>,
+    ev_buf_secondary: FixedVec<Event, MAX_EVENTS_PER_SWAP>,
 }
 
 /// To avoid two threads trying to register a window class at the same time,
@@ -199,21 +213,22 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
     let title = str_to_wstr(builder.title.as_ref(), &mut title_buf) as usize;
     let recv = Arc::new((Mutex::new(Option::<Result<WindowImpl, Error>>::None), Condvar::new()));
     let recv2 = Arc::clone(&recv); // remote thread's handle object
+    println!("title buffer: {:?}", title_buf);
 
     let thread = thread::spawn(move || unsafe {
         // HACK: Since Rust doesn't trust us to share pointers, we move a `usize`
         // There are cleaner fixes for this, but this works just fine
-        let class_name = class_name as *const ffi::WCHAR;
-        let title = title as *const ffi::WCHAR;
+        let class_name = class_name as *const WCHAR;
+        let title = title as *const WCHAR;
 
         // Create the window class if it doesn't exist yet
         let mut class_created_this_thread = false;
         let class_registry_lock = sync::mutex_lock(CLASS_REGISTRY_LOCK.get());
-        let mut class_info = mem::MaybeUninit::<ffi::WNDCLASSEXW>::uninit();
-        (*class_info.as_mut_ptr()).cbSize = mem::size_of_val(&class_info) as ffi::DWORD;
-        if ffi::GetClassInfoExW(this_hinstance(), class_name, class_info.as_mut_ptr()) == 0 {
+        let mut class_info = mem::MaybeUninit::<WNDCLASSEXW>::uninit();
+        (*class_info.as_mut_ptr()).cbSize = mem::size_of_val(&class_info) as DWORD;
+        if GetClassInfoExW(this_hinstance(), class_name, class_info.as_mut_ptr()) == 0 {
             // The window class not existing sets the thread global error flag.
-            ffi::SetLastError(ffi::ERROR_SUCCESS);
+            SetLastError(ERROR_SUCCESS);
 
             // If this is the thread registering this window class,
             // it's the one responsible for setting class-specific data below
@@ -221,9 +236,9 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
 
             // Fill in & register class (`cbSize` is set before this if block)
             let class = &mut *class_info.as_mut_ptr();
-            class.style = ffi::CS_OWNDC;
+            class.style = CS_OWNDC;
             class.lpfnWndProc = window_proc;
-            class.cbClsExtra = mem::size_of::<usize>() as ffi::c_int;
+            class.cbClsExtra = mem::size_of::<usize>() as c_int;
             class.cbWndExtra = 0;
             class.hInstance = this_hinstance();
             class.hIcon = ptr::null_mut();
@@ -235,18 +250,23 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             class.hIconSm = ptr::null_mut();
 
             // _: The fields on `WNDCLASSEXW` are known to be valid
-            let _ = ffi::RegisterClassExW(class);
+            let _ = RegisterClassExW(class);
         }
         mem::drop(class_registry_lock);
 
         let style = builder.style.dword_style();
         let style_ex = builder.style.dword_style_ex();
         let (width, height) = (1280, 720);
-        let (pos_x, pos_y) = (ffi::CW_USEDEFAULT, ffi::CW_USEDEFAULT);
+        let (pos_x, pos_y) = (CW_USEDEFAULT, CW_USEDEFAULT);
 
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
-            // ...
+            destroy_flag: atomic::AtomicBool::new(false),
+            ev_buf_sync: Mutex::new(false),
+            ev_buf_ping: Condvar::new(),
+            ev_buf_is_primary: true,
+            ev_buf_primary: FixedVec::new(),
+            ev_buf_secondary: FixedVec::new(),
         });
 
         // A user pointer is supplied for `WM_NCCREATE` & `WM_CREATE` as lpParam
@@ -254,7 +274,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             error: None,
             user: user_data.get(),
         };
-        let hwnd = ffi::CreateWindowExW(
+        let hwnd = CreateWindowExW(
             style_ex,
             class_name,
             title,
@@ -266,7 +286,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             ptr::null_mut(), // parent hwnd
             ptr::null_mut(), // menu handle
             this_hinstance(),
-            (&mut create_params) as *mut _ as ffi::LPVOID,
+            (&mut create_params) as *mut _ as LPVOID,
         );
 
         if hwnd.is_null() {
@@ -292,6 +312,25 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         // No longer needed, free memory
         mem::drop(builder);
         mem::drop(recv2);
+
+        // Run message loop until error or exit
+        let mut msg = mem::MaybeUninit::zeroed().assume_init();
+        'message_loop: loop {
+            // `HWND hWnd` is set to NULL here to query all messages on the thread,
+            // as the exit condition/signal `WM_QUIT` is not associated with any window.
+            // This is one of the main motives (besides no blocking) to give each window a thread.
+            match GetMessageW(&mut msg, ptr::null_mut(), 0, 0) {
+                -1 => panic!("Hard error {:#06X} in GetMessageW loop!", GetLastError()),
+                0 => if (&*user_data.get()).destroy_flag.load(atomic::Ordering::Acquire) {
+                    break 'message_loop
+                },
+                _ => {
+                    // Dispatch message to `window_proc`
+                    // NOTE: Some events call `window_proc` directly instead of through here
+                    let _ = DispatchMessageW(&msg);
+                },
+            }
+        }
     });
 
     // Wait until the thread is done creating the window or notifying us why it couldn't do that
@@ -309,11 +348,106 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
     }
 }
 
+impl WindowImpl {
+    pub fn events(&self) -> &[Event] {
+        // the backbuffer contains "last" events, so use *not* the active one
+        let user_data = unsafe { &*self.user };
+        if user_data.ev_buf_is_primary {
+            user_data.ev_buf_secondary.slice()
+        } else {
+            user_data.ev_buf_primary.slice()
+        }
+    }
+
+    pub fn swap_events(&mut self) {
+        let user_data = unsafe { &mut *self.user };
+        let mut lock = sync::mutex_lock(&user_data.ev_buf_sync);
+
+        // clear backbuffer, switch to it
+        if user_data.ev_buf_is_primary {
+            user_data.ev_buf_secondary.clear();
+        } else {
+            user_data.ev_buf_primary.clear();
+        }
+        user_data.ev_buf_is_primary = !user_data.ev_buf_is_primary;
+
+        // deal with potential lockup (see `WindowImplData::push_event`)
+        if *lock {
+            *lock = false; // "the request to ping the condvar is processed"
+            sync::condvar_notify1(&user_data.ev_buf_ping);
+        }
+
+        mem::drop(lock);
+    }
+}
+
+impl WindowImplData {
+    pub fn push_event(&mut self, event: Event) {
+        // If the window thread locks up, the window should too, eventually.
+        // This quirk of the event swap system stores a "is cvar waiting" in the mutex,
+        // making it so that if swap never occurs, this eventually will indefinitely block,
+        // and thus "Not Responding" will occur and a crash will snowball into the window too.
+        // This is similar to what Win32 does with its event buffer.
+        let mut lock = sync::mutex_lock(&self.ev_buf_sync);
+        loop {
+            let ev_buf = if self.ev_buf_is_primary {
+                &mut self.ev_buf_primary
+            } else {
+                &mut self.ev_buf_secondary
+            };
+            if *lock == true || !ev_buf.push(&event) {
+                *lock = true; // "the condvar should be pinged"
+                sync::condvar_wait(&self.ev_buf_ping, &mut lock);
+            } else {
+                break
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn window_proc(
-    hwnd: ffi::HWND,
-    msg: ffi::UINT,
-    wparam: ffi::WPARAM,
-    lparam: ffi::LPARAM,
-) -> ffi::LRESULT {
-    ffi::DefWindowProcW(hwnd, msg, wparam, lparam)
+    hwnd: HWND,
+    msg: UINT,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    #[inline]
+    unsafe fn user_data<'a>(hwnd: HWND) -> &'a mut WindowImplData {
+        &mut *(get_window_data(hwnd, GWL_USERDATA) as *mut WindowImplData)
+    }
+
+    match msg {
+        // No-op event, used for pinging the event loop, etc.
+        WM_NULL => 0,
+
+        // Received when the client area of the window is about to be created.
+        // This event is completed *before* `CreateWindowExW` returns, but *after* `WM_NCCREATE`.
+        // Return 0 to continue creation or -1 to destroy and return NULL from `CreateWindowExW`.
+        WM_CREATE => {
+            // `lpCreateParams` is the first field, so `CREATESTRUCTW *` is `WindowImplCreateParams **`
+            let _params = &mut **(lparam as *const *mut WindowImplCreateParams);
+            
+            // ...
+
+            0 // OK
+        },
+
+        // Received when the non-client area of the window is about to be created.
+        // This is *before* `WM_CREATE` and is basically the first event received.
+        // Return TRUE to continue creation or FALSE to destroy and return NULL from `CreateWindowExW`.
+        // Note that this is (for some reason) different to `WM_CREATE` where 0=success, -1=abort.
+        WM_NCCREATE => {
+            // `lpCreateParams` is the first field, so `CREATESTRUCTW *` is `WindowImplCreateParams **`
+            let params = &mut **(lparam as *const *mut WindowImplCreateParams);
+
+            // Store user data pointer
+            let _ = set_window_data(hwnd, GWL_USERDATA, params.user as usize);
+
+            // This is where some things like the title contents are stored,
+            // so make sure to forward `WM_NCCREATE` to DefWindowProcW
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }

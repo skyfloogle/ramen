@@ -6,7 +6,7 @@
 // DEVELOPER NOTES:
 //
 // The module `imp` (for implementation) should be pub(crate) exported, with:
-// - The type `WindowRepr` which is callable as a `WindowTrait` (deref / impl)
+// - The type `WindowRepr` which is callable as a window is (see src/window.rs)
 // - The function `spawn_window` which is `fn(&WindowBuilder) -> Result<WindowRepr, Error>`
 // For an example, see `src/platform/win32.rs`
 
