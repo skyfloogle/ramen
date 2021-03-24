@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    event::Event,
+    event::{CloseReason, Event},
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
@@ -194,6 +194,7 @@ pub struct WindowImplData {
     // Prevent external close attempts
     destroy_flag: atomic::AtomicBool,
 
+    close_reason: Option<CloseReason>,
     focus_state: bool,
 
     // Read `Self::push_event`
@@ -266,6 +267,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
 
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
+            close_reason: None, // unknown
             destroy_flag: atomic::AtomicBool::new(false),
             focus_state: false,
             ev_buf_sync: Mutex::new(false),
@@ -528,10 +530,47 @@ unsafe extern "system" fn window_proc(
             }
             0
         },
+        
+        // [ Event 0x0009 is not known to exist ]
+
+        // Received when the enable state of the window has been changed.
+        // wParam: TRUE if enabled, FALSE if disabled.
+        // lParam: Unused, ignore value.
+        // Return 0.
+        WM_ENABLE => {
+            // TODO: Check if re-enabling is needed? Can it just be prevented?
+            0
+        },
+
+        // Received to update whether the controls should be redrawn.
+        // To us this is useless, as we don't use Win32 control drawing, so we ignore it.
+        // For more info: https://devblogs.microsoft.com/oldnewthing/20140407-00/?p=1313
+        // Return 0.
+        WM_SETREDRAW => 0,
 
         // Received when a system function says we should repaint some of the window.
         // Since we don't care about Win32, we just ignore this. Return 0.
         WM_PAINT => 0,
+
+        // Received when a window is requested to close.
+        // wParam & lParam are unused. Return 0.
+        WM_CLOSE => {
+            let user_data = user_data(hwnd);
+            let reason = user_data.close_reason.take().unwrap_or(CloseReason::Unknown);
+            user_data.push_event(Event::CloseRequest(reason));
+            0
+        },
+
+        // TODO: WM_QUERYENDSESSION shenanigans
+
+        // ...
+
+        // Received when the background should be erased.
+        // Similarly to `WM_PAINT`, we don't care, as we do our own drawing.
+        // wParam: Device context handle (HDC)
+        // lParam: Unused, should be ignored.
+        // Return non-zero on erase.
+        WM_ERASEBKGND => TRUE as LRESULT,
 
         // Supposedly `WM_ACTIVATE`, but only received if the focus is to a different application.
         // This doesn't seem to be actually true, and it even has the same bugs as `WM_ACTIVATE`.
