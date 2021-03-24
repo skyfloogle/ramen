@@ -190,6 +190,8 @@ pub struct WindowImplData {
     // Prevent external close attempts
     destroy_flag: atomic::AtomicBool,
 
+    focus_state: bool,
+
     // Read `Self::push_event`
     ev_buf_sync: Mutex<bool>,
     ev_buf_ping: Condvar,
@@ -262,6 +264,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
             destroy_flag: atomic::AtomicBool::new(false),
+            focus_state: false,
             ev_buf_sync: Mutex::new(false),
             ev_buf_ping: Condvar::new(),
             ev_buf_is_primary: true,
@@ -417,7 +420,7 @@ unsafe extern "system" fn window_proc(
     }
 
     match msg {
-        // No-op event, used for pinging the event loop, etc.
+        // No-op event, used for pinging the event loop, etc. Return 0.
         WM_NULL => 0,
 
         // Received when the client area of the window is about to be created.
@@ -431,6 +434,71 @@ unsafe extern "system" fn window_proc(
 
             0 // OK
         },
+
+        // Received when the client area is being destroyed.
+        // This is sent by `DestroyWindow`, then `WM_NCDESTROY` is sent, then the window is gone.
+        // Nothing can actually be done once this message is received, and you always return 0.
+        WM_DESTROY => {
+            // Make sure it was received from a proper `DestroyWindow` call, and not manually sent.
+            if user_data(hwnd).destroy_flag.load(atomic::Ordering::Acquire) {
+                // Send `WM_QUIT` with exit code 0
+                PostQuitMessage(0);
+            }
+            0
+        },
+
+        // TODO: ...
+        WM_MOVE => {
+            // TODO: ...
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
+        // [ Event 0x0004 is not known to exist ]
+
+        // TODO: ...
+        WM_SIZE => {
+            // TODO: ...
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
+        // Received when the window is activated or deactivated (focus gain/loss). Return 0.
+        // wParam: HIWORD = non-zero if minimized, LOWORD = WA_ACTIVE | WA_CLICKACTIVE | WA_INACTIVE
+        // lParam: HWND to window being deactivated (if ACTIVE|CLICKATIVE) otherwise the activated one
+        // See also: `WM_ACTIVATEAPP`
+        WM_ACTIVATE => {
+            let user_data = user_data(hwnd);
+
+            // Quoting MSDN:
+            // "The high-order word specifies the minimized state of the window being activated
+            // or deactivated. A nonzero value indicates the window is minimized."
+            //
+            // This doesn't work entirely correctly in all situations, as with most of Win32,
+            // so if we don't do some logic here we get two events on unfocusing
+            // by clicking on the taskbar icon for example, among other things:
+            // 1) WM_INACTIVE (HIWORD == 0)
+            // 2) WM_ACTIVATE (HIWORD != 0)
+            // Note that #2 translates to active(focused) & minimized simultaneously.
+            // This would mean the window would be told it's focused after being minimized.
+            // Fantastic.
+            let active_state = wparam & 0xFFFF != 0;
+            let minimize_state = (wparam >> 16) & 0xFFFF != 0;
+            match (active_state, minimize_state) {
+                (true, true) => return 0, // nonsense described above
+                (state, _) => {
+                    if user_data.focus_state != state {
+                        user_data.focus_state = state;
+                        user_data.push_event(Event::Focus(state));
+                    }
+                },
+            }
+            0
+        },
+
+        // Supposedly `WM_ACTIVATE`, but only received if the focus is to a different application.
+        // This doesn't seem to be actually true, and it even has the same bugs as `WM_ACTIVATE`.
+        // For this reason (and being useless and confusing) it should be ignored. Return 0.
+        // See also: `WM_ACTIVATE`
+        WM_ACTIVATEAPP => 0,
 
         // Received when the non-client area of the window is about to be created.
         // This is *before* `WM_CREATE` and is basically the first event received.
@@ -447,7 +515,7 @@ unsafe extern "system" fn window_proc(
             // so make sure to forward `WM_NCCREATE` to DefWindowProcW
             DefWindowProcW(hwnd, msg, wparam, lparam)
         },
-
+        
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
