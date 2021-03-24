@@ -4,13 +4,16 @@ use crate::{
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
-use std::{cell::UnsafeCell, mem, ptr, slice, sync::{atomic, Arc}, thread};
+use std::{cell::UnsafeCell, mem, ops, ptr, slice, sync::{atomic, Arc}, thread};
 
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
 
 // TODO: Measure this
 const MAX_EVENTS_PER_SWAP: usize = 4096;
+
+// Custom window messages
+const RAMEN_WM_DROP: UINT = WM_USER + 0;
 
 // (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
 // When MS went from 32 to 64 bit, they realized how big of a mistake this was,
@@ -172,6 +175,7 @@ impl window::Style {
 
 /// Implementation container for `Window`
 pub struct WindowImpl {
+    hwnd: HWND,
     thread: Option<thread::JoinHandle<()>>,
     user: *mut WindowImplData, // 'thread
 }
@@ -215,7 +219,6 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
     let title = str_to_wstr(builder.title.as_ref(), &mut title_buf) as usize;
     let recv = Arc::new((Mutex::new(Option::<Result<WindowImpl, Error>>::None), Condvar::new()));
     let recv2 = Arc::clone(&recv); // remote thread's handle object
-    println!("title buffer: {:?}", title_buf);
 
     let thread = thread::spawn(move || unsafe {
         // HACK: Since Rust doesn't trust us to share pointers, we move a `usize`
@@ -305,6 +308,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             return // early return (dropped by caller)
         } else {
             *lock = Some(Ok(WindowImpl {
+                hwnd,
                 thread: None, // filled in by caller
                 user: user_data.get(),
             }));
@@ -419,13 +423,18 @@ unsafe extern "system" fn window_proc(
         &mut *(get_window_data(hwnd, GWL_USERDATA) as *mut WindowImplData)
     }
 
+    // Fantastic resource for a list of window messages:
+    // https://wiki.winehq.org/List_Of_Windows_Messages
     match msg {
         // No-op event, used for pinging the event loop, etc. Return 0.
         WM_NULL => 0,
 
         // Received when the client area of the window is about to be created.
         // This event is completed *before* `CreateWindowExW` returns, but *after* `WM_NCCREATE`.
+        // wParam: Unused, should be ignored.
+        // lParam: `CREATESTRUCTW *` (for inspecting, not for writing)
         // Return 0 to continue creation or -1 to destroy and return NULL from `CreateWindowExW`.
+        // See also: `WM_NCCREATE`
         WM_CREATE => {
             // `lpCreateParams` is the first field, so `CREATESTRUCTW *` is `WindowImplCreateParams **`
             let _params = &mut **(lparam as *const *mut WindowImplCreateParams);
@@ -439,7 +448,7 @@ unsafe extern "system" fn window_proc(
         // This is sent by `DestroyWindow`, then `WM_NCDESTROY` is sent, then the window is gone.
         // Nothing can actually be done once this message is received, and you always return 0.
         WM_DESTROY => {
-            // Make sure it was received from a proper `DestroyWindow` call, and not manually sent.
+            // Make sure it was received from the window being dropped, and not manually sent.
             if user_data(hwnd).destroy_flag.load(atomic::Ordering::Acquire) {
                 // Send `WM_QUIT` with exit code 0
                 PostQuitMessage(0);
@@ -464,10 +473,8 @@ unsafe extern "system" fn window_proc(
         // Received when the window is activated or deactivated (focus gain/loss). Return 0.
         // wParam: HIWORD = non-zero if minimized, LOWORD = WA_ACTIVE | WA_CLICKACTIVE | WA_INACTIVE
         // lParam: HWND to window being deactivated (if ACTIVE|CLICKATIVE) otherwise the activated one
-        // See also: `WM_ACTIVATEAPP`
+        // See also: `WM_ACTIVATEAPP` and `WM_SETFOCUS` & `WM_KILLFOCUS`
         WM_ACTIVATE => {
-            let user_data = user_data(hwnd);
-
             // Quoting MSDN:
             // "The high-order word specifies the minimized state of the window being activated
             // or deactivated. A nonzero value indicates the window is minimized."
@@ -478,21 +485,53 @@ unsafe extern "system" fn window_proc(
             // 1) WM_INACTIVE (HIWORD == 0)
             // 2) WM_ACTIVATE (HIWORD != 0)
             // Note that #2 translates to active(focused) & minimized simultaneously.
-            // This would mean the window would be told it's focused after being minimized.
-            // Fantastic.
-            let active_state = wparam & 0xFFFF != 0;
-            let minimize_state = (wparam >> 16) & 0xFFFF != 0;
-            match (active_state, minimize_state) {
-                (true, true) => return 0, // nonsense described above
-                (state, _) => {
-                    if user_data.focus_state != state {
-                        user_data.focus_state = state;
-                        user_data.push_event(Event::Focus(state));
-                    }
-                },
+            // This would mean the window would be told it's focused after being minimized. Fantastic.
+
+            // These problems could be avoided like this:
+            // match (loword, hiword) {
+            //     (true, true) => return 0,
+            //     (state, _) => {
+            //         if user_data.focus_state != state {
+            //             user_data.focus_state = state;
+            //             user_data.push_event(Event::Focus(state));
+            //         }
+            //     },
+            // }
+            // However, that's a waste of time when you can just process `WM_SETFOCUS` and `WM_KILLFOCUS`.
+
+            0
+        },
+
+        // Received when a Win32 window receives keyboard focus. Return 0.
+        // This is mainly intended for textbox controls but works perfectly fine for actual windows.
+        // See also: `WM_ACTIVATE` (to know why this is used for focus events)
+        WM_SETFOCUS => {
+            let user_data = user_data(hwnd);
+
+            if !user_data.focus_state {
+                user_data.focus_state = true;
+                user_data.push_event(Event::Focus(true));
+            }
+
+            // TODO: Cursor lock nonsense
+
+            0
+        },
+
+        // Received when a Win32 window loses keyboard focus. Return 0.
+        // See also: `WM_SETFOCUS` and `WM_ACTIVATE`
+        WM_KILLFOCUS => {
+            let user_data = user_data(hwnd);
+            if user_data.focus_state {
+                user_data.focus_state = false;
+                user_data.push_event(Event::Focus(false));
             }
             0
         },
+
+        // Received when a system function says we should repaint some of the window.
+        // Since we don't care about Win32, we just ignore this. Return 0.
+        WM_PAINT => 0,
 
         // Supposedly `WM_ACTIVATE`, but only received if the focus is to a different application.
         // This doesn't seem to be actually true, and it even has the same bugs as `WM_ACTIVATE`.
@@ -502,8 +541,10 @@ unsafe extern "system" fn window_proc(
 
         // Received when the non-client area of the window is about to be created.
         // This is *before* `WM_CREATE` and is basically the first event received.
-        // Return TRUE to continue creation or FALSE to destroy and return NULL from `CreateWindowExW`.
-        // Note that this is (for some reason) different to `WM_CREATE` where 0=success, -1=abort.
+        // wParam: Unused, should be ignored.
+        // lParam: `CREATESTRUCTW *` (for inspecting, not for writing)
+        // Return `TRUE` to continue creation or `FALSE` to abort and return NULL from `CreateWindowExW`.
+        // See also: `WM_CREATE`
         WM_NCCREATE => {
             // `lpCreateParams` is the first field, so `CREATESTRUCTW *` is `WindowImplCreateParams **`
             let params = &mut **(lparam as *const *mut WindowImplCreateParams);
@@ -515,7 +556,26 @@ unsafe extern "system" fn window_proc(
             // so make sure to forward `WM_NCCREATE` to DefWindowProcW
             DefWindowProcW(hwnd, msg, wparam, lparam)
         },
+
+        // Custom message: The "real" destroy signal that won't be rejected.
+        // TODO: document the rejection emchanism somewhere
+        // Return 0.
+        RAMEN_WM_DROP => {
+            user_data(hwnd).destroy_flag.store(true, atomic::Ordering::Release);
+            let _ = DestroyWindow(hwnd);
+            0
+        },
         
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+impl ops::Drop for WindowImpl {
+    fn drop(&mut self) {
+        // Signal the window it's OK to close, and wait for the thread to naturally return
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_DROP, 0, 0);
+        }
+        let _ = self.thread.take().map(thread::JoinHandle::join);
     }
 }
