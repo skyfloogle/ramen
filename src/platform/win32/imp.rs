@@ -12,6 +12,9 @@ use crate::platform::win32::ffi::*;
 // TODO: Measure this
 const MAX_EVENTS_PER_SWAP: usize = 4096;
 
+/// Marker to filter out implementation magic like `CicMarshalWndClass`
+const HOOKPROC_MARKER: &[u8; 4] = b"viri";
+
 // Custom window messages
 const RAMEN_WM_DROP: UINT = WM_USER + 0;
 
@@ -322,6 +325,16 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         mem::drop(builder);
         mem::drop(recv2);
 
+        // Set marker to identify our windows in HOOKPROC functions
+        if class_created_this_thread {
+            let _ = set_class_data(hwnd, 0, u32::from_le_bytes(*HOOKPROC_MARKER) as usize);
+        }
+
+        // Setup `HCBT_DESTROYWND` hook
+        // TODO: explain this
+        let thread_id = GetCurrentThreadId();
+        let hhook = SetWindowsHookExW(WH_CBT, hcbt_destroywnd_hookproc, ptr::null_mut(), thread_id);
+
         // Run message loop until error or exit
         let mut msg = mem::MaybeUninit::zeroed().assume_init();
         'message_loop: loop {
@@ -340,6 +353,9 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
                 },
             }
         }
+
+        // Free `HCBT_DESTROYWND` hook (thread global)
+        let _ = UnhookWindowsHookEx(hhook);
     });
 
     // Wait until the thread is done creating the window or notifying us why it couldn't do that
@@ -414,17 +430,40 @@ impl WindowImplData {
     }
 }
 
+#[inline]
+unsafe fn user_data<'a>(hwnd: HWND) -> &'a mut WindowImplData {
+    &mut *(get_window_data(hwnd, GWL_USERDATA) as *mut WindowImplData)
+}
+
+/// See the place it's used in `spawn_window` for an explanation
+unsafe extern "system" fn hcbt_destroywnd_hookproc(code: c_int, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HCBT_DESTROYWND {
+        let hwnd = wparam as HWND;
+        if get_class_data(hwnd, GCL_CBCLSEXTRA) == mem::size_of::<usize>()
+            && (get_class_data(hwnd, 0) as u32).to_le_bytes() == *HOOKPROC_MARKER
+        {
+            // Note that nothing is forwarded here, we decide for our windows
+            if user_data(hwnd).destroy_flag.load(atomic::Ordering::Acquire) {
+                0 // Allow
+            } else {
+                1 // Prevent
+            }
+        } else {
+            // Unrelated window, forward
+            CallNextHookEx(ptr::null_mut(), code, wparam, lparam)
+        }
+    } else {
+        // Unrelated event, forward
+        CallNextHookEx(ptr::null_mut(), code, wparam, lparam)
+    }
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: UINT,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    #[inline]
-    unsafe fn user_data<'a>(hwnd: HWND) -> &'a mut WindowImplData {
-        &mut *(get_window_data(hwnd, GWL_USERDATA) as *mut WindowImplData)
-    }
-
     // Fantastic resource for a list of window messages:
     // https://wiki.winehq.org/List_Of_Windows_Messages
     match msg {
