@@ -28,6 +28,9 @@ pub enum Event {
     /// The window focus has been updated: `true` if focused, `false` if unfocused.
     Focus(bool),
 
+    Maximize(bool),
+    Minimize(bool),
+
     /// The window has been resized or had its DPI scaling modified.
     /// 
     /// For more info, see: [`Window::inner_size`](crate::window::Window::inner_size)

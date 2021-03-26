@@ -327,6 +327,8 @@ pub struct WindowImplData {
     close_reason: Option<CloseReason>,
     destroy_flag: atomic::AtomicBool,
     is_focused: bool,
+    is_maximized: bool,
+    is_minimized: bool,
     style: window::Style,
 
     current_dpi: UINT,
@@ -411,6 +413,8 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             close_reason: None, // unknown
             destroy_flag: atomic::AtomicBool::new(false),
             is_focused: false,
+            is_maximized: false,
+            is_minimized: false,
             style: builder.style.clone(),
             ev_buf_sync: Mutex::new(false),
             ev_buf_ping: Condvar::new(),
@@ -655,7 +659,12 @@ impl WindowImpl {
 }
 
 impl WindowImplData {
+    #[inline]
     pub fn push_event(&mut self, event: Event) {
+        self.push_events(&[event]);
+    }
+
+    pub fn push_events(&mut self, events: &[Event]) {
         // If the window thread locks up, the window should too, eventually.
         // This quirk of the event swap system stores a "is cvar waiting" in the mutex,
         // making it so that if swap never occurs, this eventually will indefinitely block,
@@ -668,7 +677,7 @@ impl WindowImplData {
             } else {
                 &mut self.ev_buf_secondary
             };
-            if *lock == true || !ev_buf.push(&event) {
+            if *lock == true || !ev_buf.push_many(events) {
                 *lock = true; // "the condvar should be pinged"
                 sync::condvar_wait(&self.ev_buf_ping, &mut lock);
             } else {
@@ -773,19 +782,49 @@ unsafe extern "system" fn window_proc(
 
         // [ Event 0x0004 is not known to exist ]
 
-        // TODO: ...
+        // Received then the size has changed.
+        // wParam: Indicates the reason.
+        // lParam: LOWORD=width, HIWORD=height (of client area)
         WM_SIZE => {
             let user_data = user_data(hwnd);
-            let (cwidth, cheight) = ((lparam & 0xFFFF) as WORD, ((lparam >> 16) & 0xFFFF) as WORD);
-            let inner_size = Size::Physical(cwidth as u32, cheight as u32);
-            let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
-            // TODO: SIZE_RESTORED blah blah wtf
-            let event = if user_data.is_dpi_logical {
-                Event::Resize((inner_size.to_logical(dpi_scale), dpi_scale))
-            } else {
-                Event::Resize((inner_size, dpi_scale))
-            };
-            user_data.push_event(event);
+            let mut events = FixedVec::<Event, 3>::new();
+
+            fn set_max_min(user_data: &mut WindowImplData, buf: &mut FixedVec<Event, 3>, max: bool, min: bool) {
+                if user_data.is_maximized != max {
+                    user_data.is_maximized = max;
+                    let _ = buf.push(&Event::Maximize(max));
+                }
+                if user_data.is_minimized != min {
+                    user_data.is_minimized = min;
+                    let _ = buf.push(&Event::Minimize(min));
+                }
+            }
+
+            match wparam {
+                SIZE_RESTORED => set_max_min(user_data, &mut events, false, false),
+                SIZE_MINIMIZED => set_max_min(user_data, &mut events, false, true),
+                SIZE_MAXIMIZED => set_max_min(user_data, &mut events, true, false),
+                _ => (), // rest are for pop-up (`WS_POPUP`) windows
+            }
+
+            // Minimize events give us a confusing new client size of (0, 0) so we ignore that
+            if wparam != SIZE_MINIMIZED {
+                let lhword = ((lparam & 0xFFFF) as WORD as u32, ((lparam >> 16) & 0xFFFF) as WORD as u32);
+                if user_data.client_area != lhword {
+                    let (loword, hiword) = lhword;
+                    let inner_size = Size::Physical(loword as u32, hiword as u32);
+                    let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
+                    let event = if user_data.is_dpi_logical {
+                        Event::Resize((inner_size.to_logical(dpi_scale), dpi_scale))
+                    } else {
+                        Event::Resize((inner_size, dpi_scale))
+                    };
+                    user_data.client_area = lhword;
+                    let _ = events.push(&event);
+                }
+            }
+
+            user_data.push_events(events.slice());
             0
         },
 
