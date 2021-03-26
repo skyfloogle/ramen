@@ -29,7 +29,7 @@ macro_rules! dpi_vec2_impl {
                         "If `self` is already logical, no downscaling is done."
                     ),
                     #[inline]
-                    pub fn logical(self, scale: Scale) -> (f64, f64) {
+                    pub fn as_logical(self, scale: Scale) -> (f64, f64) {
                         // NOTE: `const fn` doesn't have floating point arithmetic yet.
                         match self {
                             Self::Logical($m1, $m2) => ($m1, $m2),
@@ -45,7 +45,7 @@ macro_rules! dpi_vec2_impl {
                         "If `self` is already physical, no upscaling is done."
                     ),
                     #[inline]
-                    pub fn physical(self, scale: Scale) -> (u32, u32) {
+                    pub fn as_physical(self, scale: Scale) -> (u32, u32) {
                         // NOTE: `const fn` doesn't have floating point arithmetic yet.
                         match self {
                             Self::Logical($m1, $m2) => (($m1 * scale) as u32, ($m2 * scale) as u32),
@@ -63,7 +63,7 @@ macro_rules! dpi_vec2_impl {
                     #[inline]
                     pub fn to_logical(self, scale: Scale) -> Self {
                         // NOTE: `const fn` doesn't have floating point arithmetic yet.
-                        let ($m1, $m2) = self.logical(scale);
+                        let ($m1, $m2) = self.as_logical(scale);
                         Self::Logical($m1, $m2)
                     }
                 );
@@ -77,7 +77,7 @@ macro_rules! dpi_vec2_impl {
                     #[inline]
                     pub fn to_physical(self, scale: Scale) -> Self {
                         // NOTE: `const fn` doesn't have floating point arithmetic yet.
-                        let ($m1, $m2) = self.physical(scale);
+                        let ($m1, $m2) = self.as_physical(scale);
                         Self::Physical($m1, $m2)
                     }
                 );
