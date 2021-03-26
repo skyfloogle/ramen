@@ -1,6 +1,7 @@
 use crate::{
     error::Error,
     event::{CloseReason, Event},
+    monitor::{/*Point,*/ Scale, Size},
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
@@ -17,9 +18,9 @@ const HOOKPROC_MARKER: &[u8; 4] = b"viri";
 
 // Custom window messages
 const RAMEN_WM_DROP:          UINT = WM_USER + 0;
-const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 1;
+const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 1; // TODO:
 const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 2;
-const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 3;
+const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 3; // TODO:
 const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 4;
 const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
 
@@ -392,6 +393,11 @@ impl WindowImpl {
     }
 
     #[inline]
+    pub fn inner_size(&self) -> (Size, Scale) {
+        todo!() // TODO:
+    }
+
+    #[inline]
     pub fn set_controls(&self, controls: Option<window::Controls>) {
         let controls = controls.map(|c| c.to_bits()).unwrap_or(!0);
         unsafe {
@@ -405,6 +411,10 @@ impl WindowImpl {
         unsafe {
             let _ = PostMessageW(self.hwnd, RAMEN_WM_SETCONTROLS, controls as WPARAM, 0);
         }
+    }
+
+    pub fn set_inner_size(&self, size: Size) {
+        todo!() // TODO:
     }
 
     #[inline]
