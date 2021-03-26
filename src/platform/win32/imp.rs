@@ -4,7 +4,7 @@ use crate::{
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
-use std::{cell::UnsafeCell, mem, ops, ptr, slice, sync::{atomic, Arc}, thread};
+use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
@@ -16,7 +16,12 @@ const MAX_EVENTS_PER_SWAP: usize = 4096;
 const HOOKPROC_MARKER: &[u8; 4] = b"viri";
 
 // Custom window messages
-const RAMEN_WM_DROP: UINT = WM_USER + 0;
+const RAMEN_WM_DROP:          UINT = WM_USER + 0;
+const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 1;
+const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 2;
+const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 3;
+const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 4;
+const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
 
 // (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
 // When MS went from 32 to 64 bit, they realized how big of a mistake this was,
@@ -194,11 +199,10 @@ pub struct WindowImplCreateParams {
 
 /// User data structure
 pub struct WindowImplData {
-    // Prevent external close attempts
-    destroy_flag: atomic::AtomicBool,
-
     close_reason: Option<CloseReason>,
-    focus_state: bool,
+    destroy_flag: atomic::AtomicBool,
+    is_focused: bool,
+    style: window::Style,
 
     // Read `Self::push_event`
     ev_buf_sync: Mutex<bool>,
@@ -272,7 +276,8 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
             close_reason: None, // unknown
             destroy_flag: atomic::AtomicBool::new(false),
-            focus_state: false,
+            is_focused: false,
+            style: builder.style.clone(),
             ev_buf_sync: Mutex::new(false),
             ev_buf_ping: Condvar::new(),
             ev_buf_is_primary: true,
@@ -356,6 +361,8 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
 
         // Free `HCBT_DESTROYWND` hook (thread global)
         let _ = UnhookWindowsHookEx(hhook);
+
+        // No need to unregister classes, that's done on exit
     });
 
     // Wait until the thread is done creating the window or notifying us why it couldn't do that
@@ -381,6 +388,91 @@ impl WindowImpl {
             user_data.ev_buf_secondary.slice()
         } else {
             user_data.ev_buf_primary.slice()
+        }
+    }
+
+    #[inline]
+    pub fn set_controls(&self, controls: Option<window::Controls>) {
+        let controls = controls.map(|c| c.to_bits()).unwrap_or(!0);
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETCONTROLS, controls as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_controls_async(&self, controls: Option<window::Controls>) {
+        let controls = controls.map(|c| c.to_bits()).unwrap_or(!0);
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_SETCONTROLS, controls as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_resizable(&self, resizable: bool) {
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETTHICKFRAME, resizable as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_resizable_async(&self, resizable: bool) {
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_SETTHICKFRAME, resizable as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_title(&self, title: &str) {
+        let mut wstr = Vec::new();
+        let lpcwstr = str_to_wstr(title, &mut wstr);
+        unsafe {
+            // TODO: explicit pass on settext in windowproc
+            let _ = SendMessageW(self.hwnd, WM_SETTEXT, 0, lpcwstr as LPARAM);
+        }
+    }
+
+    pub fn set_title_async(&self, title: &str) {
+        // Win32 has special behaviour on WM_SETTEXT, since it takes a pointer to a buffer.
+        // You can't actually call it asynchronously, *in case* it's being sent from a different process.
+        // Only if they had Rust back then, this poorly documented stupid detail would not exist,
+        // as trying to use PostMessageW with WM_SETTEXT silently fails because it's scared of lifetimes.
+        // As a workaround, we just define our own event, WM_SETTEXT_ASYNC, and still support WM_SETTEXT.
+        // This is far better than using the "unused parameter" in WM_SETTEXT anyways.
+        // More info on this: https://devblogs.microsoft.com/oldnewthing/20110916-00/?p=9623
+        let mut wstr: Vec<WCHAR> = Vec::new();
+        let lpcwstr = str_to_wstr(title, &mut wstr);
+        unsafe {
+            // TODO: okay maybe do filter null in str_to_wstr..ugh
+            if *lpcwstr == 0x00 {
+                // If the string is empty, nothing is allocated and nothing needs to be passed
+                // lParam == NULL indicates that it should be empty
+                let _ = PostMessageW(self.hwnd, RAMEN_WM_SETTEXT_ASYNC, 0, 0);
+            } else {
+                let _ = PostMessageW(
+                    self.hwnd,
+                    RAMEN_WM_SETTEXT_ASYNC,
+                    wstr.len() as WPARAM,
+                    lpcwstr as LPARAM,
+                );
+                mem::forget(wstr); // "leak" the memory as `window_proc` will clean it up
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_visible(&self, visible: bool) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        }
+    }
+
+    #[inline]
+    pub fn set_visible_async(&self, visible: bool) {
+        unsafe {
+            // They provide a function to do this asynchonously, how handy!
+            // The difference being that it does `PostMessage`, not `SendMessage`.
+            // It's implemented as `WM_SHOWWINDOW` and is handled by `DefWindowProcW` (or you).
+            let _ = ShowWindowAsync(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
         }
     }
 
@@ -428,6 +520,26 @@ impl WindowImplData {
             }
         }
     }
+}
+
+/// Due to legacy reasons, the close button is a system menu item and not a window style.
+/// This function is for turning it on and off (enabled and disabled, rather).
+unsafe fn set_close_button(hwnd: HWND, enabled: bool) {
+    let menu: HMENU = GetSystemMenu(hwnd, FALSE);
+    let flag = if enabled {
+        MF_BYCOMMAND | MF_ENABLED
+    } else {
+        MF_BYCOMMAND | MF_DISABLED | MF_GRAYED
+    };
+    let _ = EnableMenuItem(menu, SC_CLOSE as UINT, flag);
+}
+
+/// Due to legacy reasons, changing the window frame does nothing (since it's cached),
+/// until you update it with SetWindowPos with just "oh yeah, the frame changed, that's about it".
+#[inline]
+unsafe fn ping_window_frame(hwnd: HWND) {
+    const MASK: UINT = SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_FRAMECHANGED;
+    let _ = SetWindowPos(hwnd, ptr::null_mut(), 0, 0, 0, 0, MASK);
 }
 
 #[inline]
@@ -532,8 +644,8 @@ unsafe extern "system" fn window_proc(
             // match (loword, hiword) {
             //     (true, true) => return 0,
             //     (state, _) => {
-            //         if user_data.focus_state != state {
-            //             user_data.focus_state = state;
+            //         if user_data.is_focused != state {
+            //             user_data.is_focused = state;
             //             user_data.push_event(Event::Focus(state));
             //         }
             //     },
@@ -549,8 +661,8 @@ unsafe extern "system" fn window_proc(
         WM_SETFOCUS => {
             let user_data = user_data(hwnd);
 
-            if !user_data.focus_state {
-                user_data.focus_state = true;
+            if !user_data.is_focused {
+                user_data.is_focused = true;
                 user_data.push_event(Event::Focus(true));
             }
 
@@ -563,8 +675,8 @@ unsafe extern "system" fn window_proc(
         // See also: `WM_SETFOCUS` and `WM_ACTIVATE`
         WM_KILLFOCUS => {
             let user_data = user_data(hwnd);
-            if user_data.focus_state {
-                user_data.focus_state = false;
+            if user_data.is_focused {
+                user_data.is_focused = false;
                 user_data.push_event(Event::Focus(false));
             }
             0
@@ -641,6 +753,62 @@ unsafe extern "system" fn window_proc(
         RAMEN_WM_DROP => {
             user_data(hwnd).destroy_flag.store(true, atomic::Ordering::Release);
             let _ = DestroyWindow(hwnd);
+            0
+        },
+
+        // Custom event: Update window controls.
+        // wParam: If anything but !0 (~0 in C terms), window controls bits, else None.
+        // lParam: Unused, set to zero.
+        RAMEN_WM_SETCONTROLS => {
+            let mut user_data = user_data(hwnd);
+            let controls = {
+                let bits = wparam as u32;
+                if bits != !0 {
+                    Some(window::Controls::from_bits(bits))
+                } else {
+                    None
+                }
+            };
+            if user_data.style.controls != controls {
+                user_data.style.controls = controls;
+
+                // Update system menu's close button if present
+                if let Some(close) = user_data.style.controls.as_ref().map(|c| c.close) {
+                    set_close_button(hwnd, close);
+                }
+
+                // Set styles, refresh
+                user_data.style.set_for(hwnd);
+                ping_window_frame(hwnd);
+            }
+            0
+        },
+
+        // Custom event: Set the title asynchronously.
+        // wParam: Buffer length, if lParam != NULL.
+        // lParam: Vec<WCHAR> pointer or NULL for empty.
+        RAMEN_WM_SETTEXT_ASYNC => {
+            if lparam != 0 {
+                let wstr = Vec::from_raw_parts(lparam as *mut WCHAR, wparam as usize, wparam as usize);
+                let _ = DefWindowProcW(hwnd, WM_SETTEXT, 0, wstr.as_ptr() as LPARAM);
+                mem::drop(wstr); // managed by callee, caller should `mem::forget`
+            } else {
+                let _ = DefWindowProcW(hwnd, WM_SETTEXT, 0, [0x00 as WCHAR].as_ptr() as LPARAM);
+            }
+            0
+        },
+
+        // Custom event: Set whether the window is resizable.
+        // wParam: If non-zero, resizable, otherwise not resizable.
+        // lParam: Unused, set to zero.
+        RAMEN_WM_SETTHICKFRAME => {
+            let mut user_data = user_data(hwnd);
+            let resizable = wparam != 0;
+            if user_data.style.resizable != resizable {
+                user_data.style.resizable = resizable;
+                user_data.style.set_for(hwnd);
+                ping_window_frame(hwnd);
+            }
             0
         },
         
