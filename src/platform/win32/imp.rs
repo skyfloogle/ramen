@@ -10,6 +10,8 @@ use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
 
+const BASE_DPI: UINT = 96;
+
 // TODO: Measure this
 const MAX_EVENTS_PER_SWAP: usize = 4096;
 
@@ -121,6 +123,126 @@ pub fn this_hinstance() -> HINSTANCE {
     }
     (unsafe { &__ImageBase }) as *const [u8; 64] as HINSTANCE
 }
+
+unsafe fn is_windows_ver_or_greater(dl: &Win32DL, major: WORD, minor: WORD, sp_major: WORD) -> bool {
+    let mut osvi: OSVERSIONINFOEXW = mem::zeroed();
+    osvi.dwOSVersionInfoSize = mem::size_of_val(&osvi) as DWORD;
+    osvi.dwMajorVersion = major.into();
+    osvi.dwMinorVersion = minor.into();
+    osvi.wServicePackMajor = sp_major;
+
+    let mask = VER_MAJORVERSION | VER_MINORVERSION | VER_SERVICEPACKMAJOR;
+    let mut cond = VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL);
+    cond = VerSetConditionMask(cond, VER_MINORVERSION, VER_GREATER_EQUAL);
+    cond = VerSetConditionMask(cond, VER_SERVICEPACKMAJOR, VER_GREATER_EQUAL);
+
+    dl.RtlVerifyVersionInfo(&mut osvi, mask, cond) == Some(0)
+}
+
+unsafe fn is_win10_ver_or_greater(dl: &Win32DL, build: WORD) -> bool {
+    let mut osvi: OSVERSIONINFOEXW = mem::zeroed();
+    osvi.dwOSVersionInfoSize = mem::size_of_val(&osvi) as DWORD;
+    osvi.dwMajorVersion = 10;
+    osvi.dwMinorVersion = 0;
+    osvi.dwBuildNumber = build.into();
+
+    let mask = VER_MAJORVERSION | VER_MINORVERSION | VER_BUILDNUMBER;
+    let mut cond = VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL);
+    cond = VerSetConditionMask(cond, VER_MINORVERSION, VER_GREATER_EQUAL);
+    cond = VerSetConditionMask(cond, VER_BUILDNUMBER, VER_GREATER_EQUAL);
+
+    dl.RtlVerifyVersionInfo(&mut osvi, mask, cond) == Some(0)
+}
+
+#[inline]
+pub fn rect_to_size2d(rect: &RECT) -> (LONG, LONG) {
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+struct Win32 {
+    /// Dynamically linked Win32 functions that might not be available on all systems.
+    dl: Win32DL,
+
+    /// The DPI mode that's enabled process-wide. The newest available is selected.
+    /// This is done at runtime, and not in the manifest, because that's incredibly stupid.
+    dpi_mode: Win32DpiMode,
+
+    // Cached version checks, as the system can't magically upgrade without restarting
+    at_least_vista: bool,
+    at_least_8_point_1: bool,
+    at_least_anniversary_update: bool,
+    at_least_creators_update: bool,
+}
+
+enum Win32DpiMode {
+    Unsupported,
+    System,
+    PerMonitorV1,
+    PerMonitorV2,
+}
+
+impl Win32 {
+    fn new() -> Self {
+        const VISTA_MAJ: WORD = (_WIN32_WINNT_VISTA >> 8) & 0xFF;
+        const VISTA_MIN: WORD = _WIN32_WINNT_VISTA & 0xFF;
+        const W81_MAJ: WORD = (_WIN32_WINNT_WINBLUE >> 8) & 0xFF;
+        const W81_MIN: WORD = _WIN32_WINNT_WINBLUE & 0xFF;
+
+        unsafe {
+            let dl = Win32DL::link();
+
+            let at_least_vista = is_windows_ver_or_greater(&dl, VISTA_MAJ, VISTA_MIN, 0);
+            let at_least_8_point_1 = is_windows_ver_or_greater(&dl, W81_MAJ, W81_MIN, 0);
+            let at_least_anniversary_update = is_win10_ver_or_greater(&dl, 14393);
+            let at_least_creators_update = is_win10_ver_or_greater(&dl, 15063);
+
+            let dpi_mode = if at_least_creators_update {
+                let _ = dl.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                Win32DpiMode::PerMonitorV2
+            } else if at_least_8_point_1 {
+                let _ = dl.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+                Win32DpiMode::PerMonitorV1
+            } else if at_least_vista {
+                let _ = dl.SetProcessDPIAware();
+                Win32DpiMode::System
+            } else {
+                Win32DpiMode::Unsupported
+            };
+
+            Self {
+                dl,
+                dpi_mode,
+                at_least_vista,
+                at_least_8_point_1,
+                at_least_anniversary_update,
+                at_least_creators_update,
+            }
+        }
+    }
+
+    /// Win32 functions need the full outer size for creation. This function calculates that size from an inner size.
+    /// 
+    /// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
+    unsafe fn adjust_window_for_dpi(&self, size: Size, style: DWORD, style_ex: DWORD, dpi: UINT) -> (LONG, LONG) {
+        let (width, height) = size.scale_if_logical(dpi as f64 / BASE_DPI as f64);
+        let mut window = RECT { left: 0, top: 0, bottom: height as LONG, right: width as LONG };
+        if match self.dpi_mode {
+            // Non-client area DPI scaling is enabled in PMv1 Win10 1607+ and PMv2 (any).
+            // For PMv1, this is done with EnableNonClientDpiScaling at WM_NCCREATE.
+            Win32DpiMode::PerMonitorV1 if self.at_least_anniversary_update => true,
+            Win32DpiMode::PerMonitorV2 => true,
+            _ => false,
+        } {
+            let _ = self.dl.AdjustWindowRectExForDpi(&mut window, style, FALSE, style_ex, dpi);
+        } else {
+            // TODO: This *is* correct for old PMv1, right? How does broken NC scaling work?
+            let _ = AdjustWindowRectEx(&mut window, style, FALSE, style_ex);
+        }
+        rect_to_size2d(&window)
+    }
+}
+
+static WIN32: LazyCell<Win32> = LazyCell::new(Win32::new);
 
 impl window::Style {
     /// Gets this style as a bitfield. Note that it does not include the close button.
@@ -751,6 +873,12 @@ unsafe extern "system" fn window_proc(
 
             // Store user data pointer
             let _ = set_window_data(hwnd, GWL_USERDATA, params.user as usize);
+
+            // Enable the non-client area scaling patch for PMv1 if available
+            let win32 = WIN32.get();
+            if matches!(win32.dpi_mode, Win32DpiMode::PerMonitorV1) && win32.at_least_anniversary_update {
+                let _ = win32.dl.EnableNonClientDpiScaling(hwnd);
+            }
 
             // This is where some things like the title contents are stored,
             // so make sure to forward `WM_NCCREATE` to DefWindowProcW
