@@ -327,6 +327,9 @@ pub struct WindowImplData {
     is_focused: bool,
     style: window::Style,
 
+    current_dpi: UINT,
+    inner_size: Size,
+
     // Read `Self::push_event`
     ev_buf_sync: Mutex<bool>,
     ev_buf_ping: Condvar,
@@ -390,13 +393,17 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         }
         mem::drop(class_registry_lock);
 
+        let dpi = BASE_DPI; // TODO:
         let style = builder.style.dword_style();
         let style_ex = builder.style.dword_style_ex();
-        let (width, height) = (1280, 720);
+
+        let (width, height) = WIN32.adjust_window_for_dpi(builder.inner_size, style, style_ex, dpi);
         let (pos_x, pos_y) = (CW_USEDEFAULT, CW_USEDEFAULT);
 
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
+            current_dpi: dpi,
+            inner_size: builder.inner_size,
             close_reason: None, // unknown
             destroy_flag: atomic::AtomicBool::new(false),
             is_focused: false,
