@@ -775,8 +775,18 @@ unsafe extern "system" fn window_proc(
 
         // TODO: ...
         WM_SIZE => {
-            // TODO: ...
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            let user_data = user_data(hwnd);
+            let (cwidth, cheight) = ((lparam & 0xFFFF) as WORD, ((lparam >> 16) & 0xFFFF) as WORD);
+            let inner_size = Size::Physical(cwidth as u32, cheight as u32);
+            let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
+            // TODO: SIZE_RESTORED blah blah wtf
+            let event = if user_data.is_dpi_logical {
+                Event::Resize((inner_size.to_logical(dpi_scale), dpi_scale))
+            } else {
+                Event::Resize((inner_size, dpi_scale))
+            };
+            user_data.push_event(event);
+            0
         },
 
         // Received when the window is activated or deactivated (focus gain/loss). Return 0.

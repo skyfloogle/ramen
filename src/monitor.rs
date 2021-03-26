@@ -4,7 +4,7 @@ macro_rules! dpi_vec2_impl {
             // Type definition
             document!(
                 concat!("Represents an unscaled logical or physical ", $name, "."),
-                #[derive(Copy, Clone, Debug)]
+                #[derive(Copy, Clone, Debug, PartialEq)]
                 pub enum $t_ident {
                     #[doc = "Logical"] #[doc = $name] #[doc = "that is scalable to monitor DPI."]
                     Logical(f64, f64),

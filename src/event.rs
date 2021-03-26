@@ -1,3 +1,5 @@
+use crate::monitor::{Scale, Size};
+
 /// Details why a `CloseRequest` [`Event`] was received.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CloseReason {
@@ -17,7 +19,7 @@ pub enum CloseReason {
     Unknown,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Event {
     /// The window has requested to close.
     /// For more information on why, see the associated [`CloseReason`].
@@ -25,4 +27,9 @@ pub enum Event {
 
     /// The window focus has been updated: `true` if focused, `false` if unfocused.
     Focus(bool),
+
+    /// The window has been resized or had its DPI scaling modified.
+    /// 
+    /// For more info, see: [`Window::inner_size`](crate::window::Window::inner_size)
+    Resize((Size, Scale)),
 }
