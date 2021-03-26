@@ -25,6 +25,8 @@ const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 2;
 const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 3; // TODO:
 const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 4;
 const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
+const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 6;
+const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 7;
 
 // (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
 // When MS went from 32 to 64 bit, they realized how big of a mistake this was,
@@ -328,7 +330,8 @@ pub struct WindowImplData {
     style: window::Style,
 
     current_dpi: UINT,
-    inner_size: Size,
+    client_area: (u32, u32),
+    is_dpi_logical: bool,
 
     // Read `Self::push_event`
     ev_buf_sync: Mutex<bool>,
@@ -403,7 +406,8 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
             current_dpi: dpi,
-            inner_size: builder.inner_size,
+            client_area: builder.inner_size.as_physical(dpi as f64 / BASE_DPI as f64),
+            is_dpi_logical: matches!(builder.inner_size, Size::Logical(..)),
             close_reason: None, // unknown
             destroy_flag: atomic::AtomicBool::new(false),
             is_focused: false,
@@ -523,7 +527,17 @@ impl WindowImpl {
 
     #[inline]
     pub fn inner_size(&self) -> (Size, Scale) {
-        todo!() // TODO:
+        let mut size = mem::MaybeUninit::<Size>::uninit();
+        let mut scale = mem::MaybeUninit::<Scale>::uninit();
+        unsafe {
+            let _ = SendMessageW(
+                self.hwnd,
+                RAMEN_WM_GETINNERSIZE,
+                size.as_mut_ptr() as WPARAM,
+                scale.as_mut_ptr() as LPARAM,
+            );
+            (size.assume_init(), scale.assume_init())
+        }
     }
 
     #[inline]
@@ -542,8 +556,11 @@ impl WindowImpl {
         }
     }
 
+    #[inline]
     pub fn set_inner_size(&self, size: Size) {
-        todo!() // TODO:
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETINNERSIZE, 0, (&size) as *const Size as LPARAM);
+        }
     }
 
     #[inline]
@@ -954,6 +971,50 @@ unsafe extern "system" fn window_proc(
                 user_data.style.set_for(hwnd);
                 ping_window_frame(hwnd);
             }
+            0
+        },
+
+        // Custom event: Set the inner size.
+        // wParam: Unused, set to zero.
+        // lParam: `*const Size`
+        RAMEN_WM_SETINNERSIZE => {
+            let inner_size = &*(lparam as *const Size);
+            let user_data = user_data(hwnd);
+
+            user_data.client_area = inner_size.as_physical(user_data.current_dpi as f64 / BASE_DPI as f64);
+            user_data.is_dpi_logical = matches!(inner_size, Size::Logical(..));
+            let (owidth, oheight) = WIN32.adjust_window_for_dpi(
+                *inner_size,
+                user_data.style.dword_style(),
+                user_data.style.dword_style_ex(),
+                user_data.current_dpi,
+            );
+
+            const MASK: UINT = SWP_NOMOVE | SWP_NOOWNERZORDER | SWP_NOZORDER;
+            let _ = SetWindowPos(hwnd, ptr::null_mut(), 0, 0, owidth, oheight, MASK);
+
+            0
+        },
+
+        // Custom event: Query the inner size.
+        // wParam: `*mut Size` (out)
+        // lParam: `*mut Scale` (out)
+        RAMEN_WM_GETINNERSIZE => {
+            let user_data = user_data(hwnd);
+            let out_size = wparam as *mut Size;
+            let out_scale = lparam as *mut Scale;
+
+            let dpi_factor = user_data.current_dpi as f64 / BASE_DPI as f64;
+            let (width, height) = user_data.client_area;
+            let inner_size = Size::Physical(width, height);
+
+            if user_data.is_dpi_logical {
+                *out_size = inner_size.to_logical(dpi_factor);
+            } else {
+                *out_size = inner_size;
+            }
+            *out_scale = dpi_factor;
+
             0
         },
         
