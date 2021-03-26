@@ -1,10 +1,3 @@
-macro_rules! document {
-    ($comment:expr, $($tt:tt)*) => {
-        #[doc = $comment]
-        $($tt)*
-    };
-}
-
 macro_rules! dpi_vec2_impl {
     ($($t_ident:ident ($m1:ident, $m2:ident) $name:literal),* $(,)?) => {
         $(

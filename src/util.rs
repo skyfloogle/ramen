@@ -6,6 +6,88 @@ use std::{
     sync::{Arc, Once},
 };
 
+/// Helps you create C-compatible string literals, like `c_string!("Hello!")` -> `b"Hello!\0"`.
+macro_rules! c_string {
+    ($s:expr) => {
+        concat!($s, "\0").as_bytes()
+    };
+}
+
+/// Macro to get around the limitation of not being able to write `#[doc = concat!("a", "b", ...)]`.
+macro_rules! document {
+    ($comment:expr, $($tt:tt)*) => {
+        #[doc = $comment]
+        $($tt)*
+    };
+}
+
+/// Generates simple dynamic linkings.
+macro_rules! dyn_link {
+    (
+        $(#[$outer:meta])*
+        $s_vis:vis struct $s_ident:ident($dlopen:expr => $dlopen_ty:ty | $dlsym:expr) {
+            $($($module_name:literal)|+ {
+                $(
+                    $(#[$fn_outer:meta])*
+                    fn $sym_fn:ident($($name:ident : $ty:ty),*$(,)?) -> $ret:ty;
+                )*
+            }),* $(,)?
+        }
+    ) => {
+        $(#[$outer])*
+        pub struct $s_ident {
+            $($(
+                $(#[$fn_outer])*
+                $sym_fn : ::std::option::Option<
+                    unsafe extern "system" fn($($name : $ty ,)*) -> $ret
+                > ,
+            )*)*
+        }
+
+        impl $s_ident {
+            #[allow(unused_doc_comments)]
+            unsafe fn _link() -> Self {
+                let mut inst = ::std::mem::MaybeUninit::<Self>::uninit();
+                let mut inst_ref = &mut *(inst.as_mut_ptr());
+                $(
+                    let mut handle = 0 as $dlopen_ty;
+                    for name in &[$(c_string!($module_name) ,)*] {
+                        handle = $dlopen(name.as_ptr().cast());
+                        if handle != (0 as $dlopen_ty) {
+                            break
+                        }
+                    }
+                    if handle != (0 as $dlopen_ty) {
+                        $(
+                            $(#[$fn_outer])*
+                            {
+                                inst_ref.$sym_fn =
+                                    ::std::mem::transmute::<_,
+                                        Option<unsafe extern "system" fn($($name : $ty ,)*) -> $ret>>
+                                    ($dlsym(handle, c_string!(stringify!($sym_fn)).as_ptr().cast()));
+                            }
+                        )*
+                    } else {
+                        $(
+                            $(#[$fn_outer])*
+                            {
+                                inst_ref.$sym_fn = None;
+                            }
+                        )*
+                    }
+                )*
+                inst.assume_init()
+            }
+            $($(
+                $(#[$fn_outer])*
+                $s_vis unsafe fn $sym_fn(&self, $($name : $ty ,)*) -> ::std::option::Option<$ret> {
+                    self.$sym_fn.map(|f| f($($name ,)*))
+                }
+            )*)*
+        }
+    };
+}
+
 pub fn str_has_nulls(s: &str) -> bool {
     s.bytes().any(|b| b == 0x00)
 }

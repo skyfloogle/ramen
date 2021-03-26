@@ -2,13 +2,14 @@
 
 #![cfg_attr(feature = "nightly-docs", feature(doc_cfg))]
 
+#[macro_use]
+pub(crate) mod util;
+
 pub mod error;
 pub mod event;
 pub mod monitor;
 pub mod platform;
 pub mod window;
-
-pub(crate) mod util;
 
 #[cfg(test)]
 mod tests {
