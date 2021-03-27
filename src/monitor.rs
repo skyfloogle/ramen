@@ -74,14 +74,6 @@ macro_rules! dpi_vec2_impl {
                         Self::Physical($m1, $m2)
                     }
                 );
-
-                // Private implementations
-                pub(crate) fn scale_if_logical(self, scale: Scale) -> (f64, f64) {
-                    match self {
-                        Self::Logical($m1, $m2) => ($m1 * scale, $m2 * scale),
-                        Self::Physical($m1, $m2) => ($m1 as f64, $m2 as f64),
-                    }
-                }
             }
         )*
     };

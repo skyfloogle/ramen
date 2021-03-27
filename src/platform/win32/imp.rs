@@ -226,7 +226,7 @@ impl Win32 {
     ///
     /// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
     unsafe fn adjust_window_for_dpi(&self, size: Size, style: DWORD, style_ex: DWORD, dpi: UINT) -> (LONG, LONG) {
-        let (width, height) = size.scale_if_logical(dpi as f64 / BASE_DPI as f64);
+        let (width, height) = size.as_physical(dpi as f64 / BASE_DPI as f64);
         let mut window = RECT { left: 0, top: 0, bottom: height as LONG, right: width as LONG };
         if match self.dpi_mode {
             // Non-client area DPI scaling is enabled in PMv1 Win10 1607+ and PMv2 (any).
