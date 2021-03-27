@@ -223,7 +223,7 @@ impl Win32 {
     }
 
     /// Win32 functions need the full outer size for creation. This function calculates that size from an inner size.
-    /// 
+    ///
     /// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
     unsafe fn adjust_window_for_dpi(&self, size: Size, style: DWORD, style_ex: DWORD, dpi: UINT) -> (LONG, LONG) {
         let (width, height) = size.scale_if_logical(dpi as f64 / BASE_DPI as f64);
@@ -463,7 +463,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         }
         sync::condvar_notify1(&condvar);
         mem::drop(lock);
-        
+
         // No longer needed, free memory
         mem::drop(builder);
         mem::drop(recv2);
@@ -756,7 +756,7 @@ unsafe extern "system" fn window_proc(
         WM_CREATE => {
             // `lpCreateParams` is the first field, so `CREATESTRUCTW *` is `WindowImplCreateParams **`
             let _params = &mut **(lparam as *const *mut WindowImplCreateParams);
-            
+
             // ...
 
             0 // OK
@@ -823,8 +823,8 @@ unsafe extern "system" fn window_proc(
                     let _ = events.push(&event);
                 }
             }
-
             user_data.push_events(events.slice());
+
             0
         },
 
@@ -886,7 +886,7 @@ unsafe extern "system" fn window_proc(
             }
             0
         },
-        
+
         // [ Event 0x0009 is not known to exist ]
 
         // Received when the enable state of the window has been changed.
@@ -955,6 +955,17 @@ unsafe extern "system" fn window_proc(
 
             // This is where some things like the title contents are stored,
             // so make sure to forward `WM_NCCREATE` to DefWindowProcW
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
+        // Received when the user clicks a window menu control (formerly "system menu").
+        // wParam: Command enum.
+        // lParam: Mouse position (screen coords, word+word) or accelerator flags in hiword.
+        // Return 0.
+        WM_SYSCOMMAND => {
+            if wparam == SC_CLOSE {
+                user_data(hwnd).close_reason = Some(CloseReason::SystemMenu);
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         },
 
@@ -1066,7 +1077,7 @@ unsafe extern "system" fn window_proc(
 
             0
         },
-        
+
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
