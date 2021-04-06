@@ -221,7 +221,7 @@ impl Win32State {
     /// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
     unsafe fn adjust_window_for_dpi(&self, size: Size, style: DWORD, style_ex: DWORD, dpi: UINT) -> (LONG, LONG) {
         let (width, height) = size.as_physical(dpi as f64 / BASE_DPI as f64);
-        let mut window = RECT { left: 0, top: 0, bottom: height as LONG, right: width as LONG };
+        let mut window = RECT { left: 0, top: 0, right: width as LONG, bottom: height as LONG };
         if match self.dpi_mode {
             // Non-client area DPI scaling is enabled in PMv1 Win10 1607+ and PMv2 (any).
             // For PMv1, this is done with EnableNonClientDpiScaling at WM_NCCREATE.
@@ -973,14 +973,15 @@ unsafe extern "system" fn window_proc(
             #[cfg(feature = "input")]
             {
                 // TODO: Relative coordinates, mouse warp, touchscreen etc. God damn.
-                // FIXME: Find out why on earth these can go out of bounds.
-                // Probably related to the drop shadow handling with legacy Win32...
-                // Neither the GLFW or SDL guys seem to have figured it out yet.
                 let (cw, ch) = user_data.client_area;
                 let (x, y) = (
                     (lparam & 0xFFFF) as c_short,
                     ((lparam >> 16) & 0xFFFF) as c_short,
                 );
+
+                // On some versions of windows, the border padding reports `WM_MOUSEMOVE`!
+                // It's not even client area, but it does, and only when `WS_THICKFRAME` is unset?!
+                // So if SM_CXBORDER is 1 and SM_CXBORDERPADDING is 4 you'd get -5 <= x <= width+5!
                 if x >= 0 && (x as u32) < cw && y >= 0 && (y as u32) < ch {
                     let point = Point::Physical(x as u32, y as u32);
                     let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
