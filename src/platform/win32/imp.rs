@@ -161,7 +161,7 @@ pub fn rect_to_size2d(rect: &RECT) -> (LONG, LONG) {
     (rect.right - rect.left, rect.bottom - rect.top)
 }
 
-struct Win32 {
+struct Win32State {
     /// Dynamically linked Win32 functions that might not be available on all systems.
     dl: Win32DL,
 
@@ -170,10 +170,7 @@ struct Win32 {
     dpi_mode: Win32DpiMode,
 
     // Cached version checks, as the system can't magically upgrade without restarting
-    at_least_vista: bool,
-    at_least_8_point_1: bool,
     at_least_anniversary_update: bool,
-    at_least_creators_update: bool,
 }
 
 enum Win32DpiMode {
@@ -183,7 +180,7 @@ enum Win32DpiMode {
     PerMonitorV2,
 }
 
-impl Win32 {
+impl Win32State {
     fn new() -> Self {
         const VISTA_MAJ: WORD = (_WIN32_WINNT_VISTA >> 8) & 0xFF;
         const VISTA_MIN: WORD = _WIN32_WINNT_VISTA & 0xFF;
@@ -214,10 +211,7 @@ impl Win32 {
             Self {
                 dl,
                 dpi_mode,
-                at_least_vista,
-                at_least_8_point_1,
                 at_least_anniversary_update,
-                at_least_creators_update,
             }
         }
     }
@@ -244,7 +238,7 @@ impl Win32 {
     }
 }
 
-static WIN32: LazyCell<Win32> = LazyCell::new(Win32::new);
+static WIN32: LazyCell<Win32State> = LazyCell::new(Win32State::new);
 
 impl window::Style {
     /// Gets this style as a bitfield. Note that it does not include the close button.
