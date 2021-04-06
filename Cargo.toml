@@ -8,7 +8,8 @@ edition = "2018"
 parking_lot = { optional = true, version = "0.11" }
 
 [features]
-default = []
+default = ["input"]
+input = []
 nightly-docs = []
 parking-lot = ["parking_lot"]
 
