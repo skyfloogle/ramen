@@ -1,6 +1,6 @@
-use crate::monitor::{Scale, Size};
+use crate::monitor::{Point, Scale, Size};
 
-/// Details why a `CloseRequest` [`Event`] was received.
+/// Details the source of [`Event::CloseRequest`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CloseReason {
     /// The user has pressed a system control to close the window.
@@ -20,6 +20,7 @@ pub enum CloseReason {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     /// The window has requested to close.
     /// For more information on why, see the associated [`CloseReason`].
@@ -33,6 +34,18 @@ pub enum Event {
 
     /// The window's minimize state has been updated (`true` if minimized).
     Minimize(bool),
+
+    /// The mouse has entered (`true`) or left (`false`) the inner area of the window.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    MouseFocus(bool),
+
+    /// The position of the mouse inside the window has been updated.
+    ///
+    /// The associated values work the same as [`Event::Resize`].
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    MouseMove((Point, Scale)),
 
     /// The window has been resized or had its DPI scaling modified.
     ///

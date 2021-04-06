@@ -1,7 +1,7 @@
 use crate::{
     error::Error,
     event::{CloseReason, Event},
-    monitor::{/*Point,*/ Scale, Size},
+    monitor::{Point, Scale, Size},
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, WindowBuilder},
 };
@@ -961,6 +961,39 @@ unsafe extern "system" fn window_proc(
                 user_data(hwnd).close_reason = Some(CloseReason::SystemMenu);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
+        // Received then the mouse cursor has moved around in the client area.
+        // wParam: Big bitfield of which virtual keys are down (see MSDN).
+        // lParam: loword = signed X coordinate, hiword = signed Y coordinate
+        // Return 0.
+        WM_MOUSEMOVE => {
+            let user_data = user_data(hwnd);
+
+            #[cfg(feature = "input")]
+            {
+                // TODO: Relative coordinates, mouse warp, touchscreen etc. God damn.
+                // FIXME: Find out why on earth these can go out of bounds.
+                // Probably related to the drop shadow handling with legacy Win32...
+                // Neither the GLFW or SDL guys seem to have figured it out yet.
+                let (cw, ch) = user_data.client_area;
+                let (x, y) = (
+                    (lparam & 0xFFFF) as c_short,
+                    ((lparam >> 16) & 0xFFFF) as c_short,
+                );
+                if x >= 0 && (x as u32) < cw && y >= 0 && (y as u32) < ch {
+                    let point = Point::Physical(x as u32, y as u32);
+                    let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
+                    let event = if user_data.is_dpi_logical {
+                        Event::MouseMove((point.to_logical(dpi_scale), dpi_scale))
+                    } else {
+                        Event::MouseMove((point, dpi_scale))
+                    };
+                    user_data.push_event(event);
+                }
+            }
+
+            0
         },
 
         // Custom message: The "real" destroy signal that won't be rejected.
