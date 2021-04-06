@@ -25,14 +25,17 @@ pub enum Event {
     /// For more information on why, see the associated [`CloseReason`].
     CloseRequest(CloseReason),
 
-    /// The window focus has been updated: `true` if focused, `false` if unfocused.
+    /// The window focus state has been updated (`true` if focused).
     Focus(bool),
 
+    /// The window's maximize state has been updated (`true` if maximized).
     Maximize(bool),
+
+    /// The window's minimize state has been updated (`true` if minimized).
     Minimize(bool),
 
     /// The window has been resized or had its DPI scaling modified.
-    /// 
+    ///
     /// For more info, see: [`Window::inner_size`](crate::window::Window::inner_size)
     Resize((Size, Scale)),
 }
