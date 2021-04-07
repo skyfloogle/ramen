@@ -10,15 +10,21 @@ use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
 
+/// To avoid two threads trying to register a window class at the same time,
+/// this global mutex is locked while doing window class queries / entries.
+static CLASS_REGISTRY_LOCK: LazyCell<Mutex<()>> = LazyCell::new(|| Mutex::new(()));
+
+// Global immutable struct containing dynamically acquired API state
+static WIN32: LazyCell<Win32State> = LazyCell::new(Win32State::new);
+
+/// TODO: yeah
 const BASE_DPI: UINT = 96;
-
-// TODO: Measure this
+/// TODO: Measure this
 const MAX_EVENTS_PER_SWAP: usize = 4096;
-
 /// Marker to filter out implementation magic like `CicMarshalWndClass`
 const HOOKPROC_MARKER: &[u8; 4] = b"viri";
 
-// Custom window messages
+// Custom window messages (see `window_proc` for docs)
 const RAMEN_WM_DROP:          UINT = WM_USER + 0;
 const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 1; // TODO:
 const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 2;
@@ -28,104 +34,18 @@ const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
 const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 6;
 const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 7;
 
-// (Get/Set)(Class/Window)Long(A/W) all took LONG, a 32-bit type.
-// When MS went from 32 to 64 bit, they realized how big of a mistake this was,
-// seeing as some of those values need to be as big as a pointer is (like size_t).
-// Unfortunately they exported the 32-bit ones on 64-bit with mismatching signatures.
-// These functions wrap both of those function sets to `usize`, which matches on 32 & 64 bit.
-#[cfg(target_pointer_width = "32")]
-#[inline]
-pub unsafe fn get_class_data(hwnd: HWND, offset: c_int) -> usize {
-    GetClassLongW(hwnd, offset) as usize
-}
-#[cfg(target_pointer_width = "64")]
-#[inline]
-pub unsafe fn get_class_data(hwnd: HWND, offset: c_int) -> usize {
-    GetClassLongPtrW(hwnd, offset) as usize
-}
-#[cfg(target_pointer_width = "32")]
-#[inline]
-pub unsafe fn set_class_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
-    SetClassLongW(hwnd, offset, data as LONG) as usize
-}
-#[cfg(target_pointer_width = "64")]
-#[inline]
-pub unsafe fn set_class_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
-    SetClassLongPtrW(hwnd, offset, data as LONG_PTR) as usize
-}
-#[cfg(target_pointer_width = "32")]
-#[inline]
-pub unsafe fn get_window_data(hwnd: HWND, offset: c_int) -> usize {
-    GetWindowLongW(hwnd, offset) as usize
-}
-#[cfg(target_pointer_width = "64")]
-#[inline]
-pub unsafe fn get_window_data(hwnd: HWND, offset: c_int) -> usize {
-    GetWindowLongPtrW(hwnd, offset) as usize
-}
-#[cfg(target_pointer_width = "32")]
-#[inline]
-pub unsafe fn set_window_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
-    SetWindowLongW(hwnd, offset, data as LONG) as usize
-}
-#[cfg(target_pointer_width = "64")]
-#[inline]
-pub unsafe fn set_window_data(hwnd: HWND, offset: c_int, data: usize) -> usize {
-    SetWindowLongPtrW(hwnd, offset, data as LONG_PTR) as usize
-}
-
-/// Converts a &str to an LPCWSTR-compatible string array.
-fn str_to_wstr(src: &str, buffer: &mut Vec<WCHAR>) -> LPCWSTR {
-    // NOTE: Yes, indeed, `std::os::windows::OsStr(ing)ext` does exist in the standard library,
-    // but it requires you to fit your data in the OsStr(ing) model and it's not hyper optimized
-    // unlike mb2wc with handwritten SSE (allegedly), alongside being the native conversion function
-
-    // MultiByteToWideChar can't actually handle 0 length because 0 return means error
-    if src.is_empty() || src.len() > c_int::max_value() as usize {
-        return [0x00].as_ptr()
-    }
-
-    unsafe {
-        let str_ptr: LPCSTR = src.as_ptr().cast();
-        let str_len = src.len() as c_int;
-
-        // Calculate buffer size
-        let req_buffer_size = MultiByteToWideChar(
-            CP_UTF8, 0,
-            str_ptr, str_len,
-            ptr::null_mut(), 0, // `lpWideCharStr == NULL` means query size
-        ) as usize + 1; // +1 for null terminator
-
-        // Ensure buffer capacity
-        buffer.clear();
-        buffer.reserve(req_buffer_size);
-
-        // Write to our buffer
-        let chars_written = MultiByteToWideChar(
-            CP_UTF8, 0,
-            str_ptr, str_len,
-            buffer.as_mut_ptr(), req_buffer_size as c_int,
-        ) as usize;
-
-        // Add null terminator & yield
-        *buffer.as_mut_ptr().add(chars_written) = 0x00;
-        buffer.set_len(req_buffer_size);
-        buffer.as_ptr()
-    }
-}
-
 /// Retrieves the base module HINSTANCE.
 #[inline]
 pub fn this_hinstance() -> HINSTANCE {
     extern "system" {
         // Microsoft's linkers provide a static HINSTANCE to not have to query it at runtime.
-        // Source: https://devblogs.microsoft.com/oldnewthing/20041025-00/?p=37483
-        // (I love you Raymond Chen)
-        static __ImageBase: [u8; 64];
+        // More info: https://devblogs.microsoft.com/oldnewthing/20041025-00/?p=37483
+        static __ImageBase: IMAGE_DOS_HEADER;
     }
-    (unsafe { &__ImageBase }) as *const [u8; 64] as HINSTANCE
+    (unsafe { &__ImageBase }) as *const IMAGE_DOS_HEADER as HINSTANCE
 }
 
+/// Checks the current Windows version (see usage in `Win32State`)
 unsafe fn is_windows_ver_or_greater(dl: &Win32DL, major: WORD, minor: WORD, sp_major: WORD) -> bool {
     let mut osvi: OSVERSIONINFOEXW = mem::zeroed();
     osvi.dwOSVersionInfoSize = mem::size_of_val(&osvi) as DWORD;
@@ -141,6 +61,7 @@ unsafe fn is_windows_ver_or_greater(dl: &Win32DL, major: WORD, minor: WORD, sp_m
     dl.RtlVerifyVersionInfo(&mut osvi, mask, cond) == Some(0)
 }
 
+/// Checks a specific Windows 10 update level (see usage in `Win32State`)
 unsafe fn is_win10_ver_or_greater(dl: &Win32DL, build: WORD) -> bool {
     let mut osvi: OSVERSIONINFOEXW = mem::zeroed();
     osvi.dwOSVersionInfoSize = mem::size_of_val(&osvi) as DWORD;
@@ -156,21 +77,17 @@ unsafe fn is_win10_ver_or_greater(dl: &Win32DL, build: WORD) -> bool {
     dl.RtlVerifyVersionInfo(&mut osvi, mask, cond) == Some(0)
 }
 
-#[inline]
-pub fn rect_to_size2d(rect: &RECT) -> (LONG, LONG) {
-    (rect.right - rect.left, rect.bottom - rect.top)
-}
-
 struct Win32State {
-    /// Dynamically linked Win32 functions that might not be available on all systems.
-    dl: Win32DL,
+    /// Whether the system is at least on Windows 10 1607 (build 14393 - "Anniversary Update").
+    at_least_anniversary_update: bool,
 
     /// The DPI mode that's enabled process-wide. The newest available is selected.
-    /// This is done at runtime, and not in the manifest, because that's incredibly stupid.
+    /// MSDN recommends setting this with the manifest but that's rather unpleasant.
+    /// Instead, it's set dynamically at runtime when this struct is instanced.
     dpi_mode: Win32DpiMode,
 
-    // Cached version checks, as the system can't magically upgrade without restarting
-    at_least_anniversary_update: bool,
+    /// Dynamically linked Win32 functions that might not be available on all systems.
+    dl: Win32DL,
 }
 
 enum Win32DpiMode {
@@ -215,98 +132,157 @@ impl Win32State {
             }
         }
     }
+}
 
-    /// Win32 functions need the full outer size for creation. This function calculates that size from an inner size.
-    ///
-    /// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
-    unsafe fn adjust_window_for_dpi(&self, size: Size, style: DWORD, style_ex: DWORD, dpi: UINT) -> (LONG, LONG) {
-        let (width, height) = size.as_physical(dpi as f64 / BASE_DPI as f64);
-        let mut window = RECT { left: 0, top: 0, right: width as LONG, bottom: height as LONG };
-        if match self.dpi_mode {
-            // Non-client area DPI scaling is enabled in PMv1 Win10 1607+ and PMv2 (any).
-            // For PMv1, this is done with EnableNonClientDpiScaling at WM_NCCREATE.
-            Win32DpiMode::PerMonitorV1 if self.at_least_anniversary_update => true,
-            Win32DpiMode::PerMonitorV2 => true,
-            _ => false,
-        } {
-            let _ = self.dl.AdjustWindowRectExForDpi(&mut window, style, FALSE, style_ex, dpi);
-        } else {
-            // TODO: This *is* correct for old PMv1, right? How does broken NC scaling work?
-            let _ = AdjustWindowRectEx(&mut window, style, FALSE, style_ex);
+/// Win32 functions need the full outer size for creation. This function calculates that size from an inner size.
+///
+/// Since for legacy reasons things like drop shadow are part of the bounds, don't use this for reporting outer size.
+unsafe fn adjust_window_for_dpi(
+    win32: &Win32State,
+    size: Size,
+    style: DWORD,
+    style_ex: DWORD,
+    dpi: UINT,
+) -> (LONG, LONG) {
+    let (width, height) = size.as_physical(dpi as f64 / BASE_DPI as f64);
+    let mut window = RECT { left: 0, top: 0, right: width as LONG, bottom: height as LONG };
+    if match win32.dpi_mode {
+        // Non-client area DPI scaling is enabled in PMv1 Win10 1607+ and PMv2 (any).
+        // For PMv1, this is done with EnableNonClientDpiScaling at WM_NCCREATE.
+        Win32DpiMode::PerMonitorV1 if win32.at_least_anniversary_update => true,
+        Win32DpiMode::PerMonitorV2 => true,
+        _ => false,
+    } {
+        let _ = win32.dl.AdjustWindowRectExForDpi(&mut window, style, FALSE, style_ex, dpi);
+    } else {
+        // TODO: This *is* correct for old PMv1, right? How does broken NC scaling work?
+        let _ = AdjustWindowRectEx(&mut window, style, FALSE, style_ex);
+    }
+    rect_to_size2d(&window)
+}
+
+#[inline]
+fn rect_to_size2d(rect: &RECT) -> (LONG, LONG) {
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+/// Gets this style as a bitfield. Note that it does not include the close button.
+/// The close button is a menu property, not a window style.
+fn style_as_win32(style: &window::Style) -> DWORD {
+    let mut dword = 0;
+
+    if style.borderless {
+        // TODO: Why does this just not work without THICKFRAME? Borderless is dumb.
+        dword |= WS_POPUP | WS_THICKFRAME;
+    } else {
+        dword |= WS_OVERLAPPED | WS_BORDER | WS_CAPTION;
+    }
+
+    if style.resizable {
+        dword |= WS_THICKFRAME;
+    }
+
+    if style.visible {
+        dword |= WS_VISIBLE;
+    }
+
+    if let Some(controls) = &style.controls {
+        if controls.minimize {
+            dword |= WS_MINIMIZEBOX;
         }
-        rect_to_size2d(&window)
+        if controls.maximize {
+            dword |= WS_MAXIMIZEBOX;
+        }
+        dword |= WS_SYSMENU;
+    }
+
+    dword
+}
+
+/// Gets the extended window style bits.
+fn style_as_win32_ex(style: &window::Style) -> DWORD {
+    let mut dword = 0;
+
+    if style.rtl_layout {
+        dword |= WS_EX_LAYOUTRTL;
+    }
+
+    if style.tool_window {
+        dword |= WS_EX_TOOLWINDOW;
+    }
+
+    dword
+}
+
+/// Due to legacy reasons, changing the window frame does nothing (since it's cached),
+/// until you update it with SetWindowPos with just "oh yeah, the frame changed, that's about it".
+#[inline]
+unsafe fn ping_window_frame(hwnd: HWND) {
+    const MASK: UINT = SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_FRAMECHANGED;
+    let _ = SetWindowPos(hwnd, ptr::null_mut(), 0, 0, 0, 0, MASK);
+}
+
+/// Convenience function to take a `window::Style` and slap it on a HWND.
+fn update_window_style(hwnd: HWND, style: &window::Style) {
+    let dword = style_as_win32(&style);
+    let dword_ex = style_as_win32_ex(&style);
+    unsafe {
+        let _ = set_window_data(hwnd, GWL_STYLE, dword as usize);
+        let _ = set_window_data(hwnd, GWL_EXSTYLE, dword_ex as usize);
+        ping_window_frame(hwnd);
     }
 }
 
-static WIN32: LazyCell<Win32State> = LazyCell::new(Win32State::new);
+/// Converts a &str to an LPCWSTR-compatible wide string.
+///
+/// If the length is 0 (aka `*retv == 0x00`) then no allocation was made (it points to a static NULL).
+fn str_to_wstr(src: &str, buffer: &mut Vec<WCHAR>) -> *const WCHAR {
+    // NOTE: Yes, indeed, `std::os::windows::OsStr(ing)ext` does exist in the standard library,
+    // but it requires you to fit your data in the OsStr(ing) model and it's not hyper optimized
+    // unlike mb2wc with handwritten SSE (allegedly), alongside being the native conversion function
 
-impl window::Style {
-    /// Gets this style as a bitfield. Note that it does not include the close button.
-    /// The close button is a menu property, not a window style.
-    pub(crate) fn dword_style(&self) -> DWORD {
-        let mut style = 0;
-
-        if self.borderless {
-            // TODO: Why does this just not work without THICKFRAME? Borderless is dumb.
-            style |= WS_POPUP | WS_THICKFRAME;
-        } else {
-            style |= WS_OVERLAPPED | WS_BORDER | WS_CAPTION;
-        }
-
-        if self.resizable {
-            style |= WS_THICKFRAME;
-        }
-
-        if self.visible {
-            style |= WS_VISIBLE;
-        }
-
-        if let Some(controls) = &self.controls {
-            if controls.minimize {
-                style |= WS_MINIMIZEBOX;
-            }
-            if controls.maximize {
-                style |= WS_MAXIMIZEBOX;
-            }
-            style |= WS_SYSMENU;
-        }
-
-        style
+    // MultiByteToWideChar can't actually handle 0 length because 0 return means error
+    if src.is_empty() || src.len() > c_int::max_value() as usize {
+        return [0x00].as_ptr()
     }
 
-    /// Gets the extended window style.
-    pub(crate) fn dword_style_ex(&self) -> DWORD {
-        let mut style = 0;
+    unsafe {
+        let str_ptr: *const CHAR = src.as_ptr().cast();
+        let str_len = src.len() as c_int;
 
-        if self.rtl_layout {
-            style |= WS_EX_LAYOUTRTL;
-        }
+        // Calculate buffer size
+        let req_buffer_size = MultiByteToWideChar(
+            CP_UTF8, 0,
+            str_ptr, str_len,
+            ptr::null_mut(), 0, // `lpWideCharStr == NULL` means query size
+        ) as usize + 1; // +1 for null terminator
 
-        if self.tool_window {
-            style |= WS_EX_TOOLWINDOW;
-        }
+        // Ensure buffer capacity
+        buffer.clear();
+        buffer.reserve(req_buffer_size);
 
-        style
-    }
+        // Write to our buffer
+        let chars_written = MultiByteToWideChar(
+            CP_UTF8, 0,
+            str_ptr, str_len,
+            buffer.as_mut_ptr(), req_buffer_size as c_int,
+        ) as usize;
 
-    /// Sets both styles for target window handle.
-    pub(crate) fn set_for(&self, hwnd: HWND) {
-        let style = self.dword_style();
-        let style_ex = self.dword_style_ex();
-        unsafe {
-            let _ = set_window_data(hwnd, GWL_STYLE, style as usize);
-            let _ = set_window_data(hwnd, GWL_EXSTYLE, style_ex as usize);
-        }
+        // Add null terminator & yield
+        *buffer.as_mut_ptr().add(chars_written) = 0x00;
+        buffer.set_len(req_buffer_size);
+        buffer.as_ptr()
     }
 }
 
-/// Implementation container for `Window`
+/// Implementation container for `window::Window`
 pub struct WindowImpl {
     hwnd: HWND,
     thread: Option<thread::JoinHandle<()>>,
     user: *mut WindowImplData, // 'thread
 }
 
+// Pointers automatically lose Send and Sync, so...
 unsafe impl Send for WindowImpl {}
 unsafe impl Sync for WindowImpl {}
 
@@ -316,30 +292,42 @@ pub struct WindowImplCreateParams {
     user: *mut WindowImplData,
 }
 
-/// User data structure
+/// User data structure.
+///
+/// Mostly unsynchronized (and is therefore for the window thread only), handle with care.
 pub struct WindowImplData {
-    close_reason: Option<CloseReason>,
-    destroy_flag: atomic::AtomicBool,
-    is_focused: bool,
-    is_maximized: bool,
-    is_minimized: bool,
-    style: window::Style,
+    /// Current size of the client area (inner area)
+    client_area_size: (u32, u32),
 
+    /// Reason that `CloseRequest` was sent (consumed by `WM_CLOSE`)
+    close_reason: Option<CloseReason>,
+
+    /// The current (as in, where the window is) monitor DPI.
     current_dpi: UINT,
-    client_area: (u32, u32),
+
+    /// Whether things should be scaled according to DPI.
     is_dpi_logical: bool,
 
-    // Read `Self::push_event`
+    /// Indicates whether the window should be closing and destroying.
+    /// TODO: explain
+    destroy_flag: atomic::AtomicBool,
+
+    /// The current window style which both `DWORD` styles can be built out of.
+    style: window::Style,
+
+    // Very lightweight event-swap system...
+    // Read `Self::push_event` for more info
     ev_buf_sync: Mutex<bool>,
     ev_buf_ping: Condvar,
     ev_buf_is_primary: bool,
     ev_buf_primary: FixedVec<Event, MAX_EVENTS_PER_SWAP>,
     ev_buf_secondary: FixedVec<Event, MAX_EVENTS_PER_SWAP>,
-}
 
-/// To avoid two threads trying to register a window class at the same time,
-/// this global mutex is locked while doing window class queries / entries.
-static CLASS_REGISTRY_LOCK: LazyCell<Mutex<()>> = LazyCell::new(|| Mutex::new(()));
+    // State flag dump
+    is_focused: bool,
+    is_maximized: bool,
+    is_minimized: bool,
+}
 
 pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
     let builder = builder.clone();
@@ -393,28 +381,30 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
         mem::drop(class_registry_lock);
 
         let dpi = BASE_DPI; // TODO:
-        let style = builder.style.dword_style();
-        let style_ex = builder.style.dword_style_ex();
+        let style = style_as_win32(&builder.style);
+        let style_ex = style_as_win32_ex(&builder.style);
 
-        let (width, height) = WIN32.adjust_window_for_dpi(builder.inner_size, style, style_ex, dpi);
+        let (width, height) = adjust_window_for_dpi(WIN32.get(), builder.inner_size, style, style_ex, dpi);
         let (pos_x, pos_y) = (CW_USEDEFAULT, CW_USEDEFAULT);
 
         // Special
         let user_data: UnsafeCell<WindowImplData> = UnsafeCell::new(WindowImplData {
-            current_dpi: dpi,
-            client_area: builder.inner_size.as_physical(dpi as f64 / BASE_DPI as f64),
-            is_dpi_logical: matches!(builder.inner_size, Size::Logical(..)),
+            client_area_size: builder.inner_size.as_physical(dpi as f64 / BASE_DPI as f64),
             close_reason: None, // unknown
+            current_dpi: dpi,
+            is_dpi_logical: matches!(builder.inner_size, Size::Logical(..)),
             destroy_flag: atomic::AtomicBool::new(false),
-            is_focused: false,
-            is_maximized: false,
-            is_minimized: false,
             style: builder.style.clone(),
+
             ev_buf_sync: Mutex::new(false),
             ev_buf_ping: Condvar::new(),
             ev_buf_is_primary: true,
             ev_buf_primary: FixedVec::new(),
             ev_buf_secondary: FixedVec::new(),
+
+            is_focused: false,
+            is_maximized: false,
+            is_minimized: false,
         });
 
         // A user pointer is supplied for `WM_NCCREATE` & `WM_CREATE` as lpParam
@@ -434,7 +424,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             ptr::null_mut(), // parent hwnd
             ptr::null_mut(), // menu handle
             this_hinstance(),
-            (&mut create_params) as *mut _ as LPVOID,
+            (&mut create_params) as *mut _ as *mut c_void,
         );
 
         if hwnd.is_null() {
@@ -693,14 +683,6 @@ unsafe fn set_close_button(hwnd: HWND, enabled: bool) {
     let _ = EnableMenuItem(menu, SC_CLOSE as UINT, flag);
 }
 
-/// Due to legacy reasons, changing the window frame does nothing (since it's cached),
-/// until you update it with SetWindowPos with just "oh yeah, the frame changed, that's about it".
-#[inline]
-unsafe fn ping_window_frame(hwnd: HWND) {
-    const MASK: UINT = SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_FRAMECHANGED;
-    let _ = SetWindowPos(hwnd, ptr::null_mut(), 0, 0, 0, 0, MASK);
-}
-
 #[inline]
 unsafe fn user_data<'a>(hwnd: HWND) -> &'a mut WindowImplData {
     &mut *(get_window_data(hwnd, GWL_USERDATA) as *mut WindowImplData)
@@ -738,7 +720,7 @@ unsafe extern "system" fn window_proc(
     // Fantastic resource for a list of window messages:
     // https://wiki.winehq.org/List_Of_Windows_Messages
     match msg {
-        // No-op event, used for pinging the event loop, etc. Return 0.
+        // No-op event, used for pinging the event loop, stubbing, etc. Return 0.
         WM_NULL => 0,
 
         // Received when the client area of the window is about to be created.
@@ -804,7 +786,7 @@ unsafe extern "system" fn window_proc(
             // Minimize events give us a confusing new client size of (0, 0) so we ignore that
             if wparam != SIZE_MINIMIZED {
                 let lhword = ((lparam & 0xFFFF) as WORD as u32, ((lparam >> 16) & 0xFFFF) as WORD as u32);
-                if user_data.client_area != lhword {
+                if user_data.client_area_size != lhword {
                     let (loword, hiword) = lhword;
                     let inner_size = Size::Physical(loword as u32, hiword as u32);
                     let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
@@ -813,7 +795,7 @@ unsafe extern "system" fn window_proc(
                     } else {
                         Event::Resize((inner_size, dpi_scale))
                     };
-                    user_data.client_area = lhword;
+                    user_data.client_area_size = lhword;
                     let _ = events.push(&event);
                 }
             }
@@ -973,7 +955,7 @@ unsafe extern "system" fn window_proc(
             #[cfg(feature = "input")]
             {
                 // TODO: Relative coordinates, mouse warp, touchscreen etc. God damn.
-                let (cw, ch) = user_data.client_area;
+                let (cw, ch) = user_data.client_area_size;
                 let (x, y) = (
                     (lparam & 0xFFFF) as c_short,
                     ((lparam >> 16) & 0xFFFF) as c_short,
@@ -1028,8 +1010,7 @@ unsafe extern "system" fn window_proc(
                 }
 
                 // Set styles, refresh
-                user_data.style.set_for(hwnd);
-                ping_window_frame(hwnd);
+                update_window_style(hwnd, &user_data.style);
             }
             0
         },
@@ -1056,8 +1037,7 @@ unsafe extern "system" fn window_proc(
             let resizable = wparam != 0;
             if user_data.style.resizable != resizable {
                 user_data.style.resizable = resizable;
-                user_data.style.set_for(hwnd);
-                ping_window_frame(hwnd);
+                update_window_style(hwnd, &user_data.style);
             }
             0
         },
@@ -1069,12 +1049,13 @@ unsafe extern "system" fn window_proc(
             let inner_size = &*(lparam as *const Size);
             let user_data = user_data(hwnd);
 
-            user_data.client_area = inner_size.as_physical(user_data.current_dpi as f64 / BASE_DPI as f64);
+            user_data.client_area_size = inner_size.as_physical(user_data.current_dpi as f64 / BASE_DPI as f64);
             user_data.is_dpi_logical = matches!(inner_size, Size::Logical(..));
-            let (owidth, oheight) = WIN32.adjust_window_for_dpi(
+            let (owidth, oheight) = adjust_window_for_dpi(
+                WIN32.get(),
                 *inner_size,
-                user_data.style.dword_style(),
-                user_data.style.dword_style_ex(),
+                style_as_win32(&user_data.style),
+                style_as_win32_ex(&user_data.style),
                 user_data.current_dpi,
             );
 
@@ -1093,7 +1074,7 @@ unsafe extern "system" fn window_proc(
             let out_scale = lparam as *mut Scale;
 
             let dpi_factor = user_data.current_dpi as f64 / BASE_DPI as f64;
-            let (width, height) = user_data.client_area;
+            let (width, height) = user_data.client_area_size;
             let inner_size = Size::Physical(width, height);
 
             if user_data.is_dpi_logical {
