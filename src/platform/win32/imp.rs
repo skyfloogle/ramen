@@ -34,7 +34,7 @@ const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
 const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 6;
 const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 7;
 
-/// Retrieves the base module HINSTANCE.
+/// Retrieves the base module [`HINSTANCE`].
 #[inline]
 pub fn this_hinstance() -> HINSTANCE {
     extern "system" {
