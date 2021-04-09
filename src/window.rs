@@ -58,7 +58,7 @@ impl Default for Controls {
 }
 
 /// Represents an open window. Dropping it closes the window.
-/// 
+///
 /// To instantiate windows, use a [`builder`](Self::builder).
 pub struct Window(imp::WindowRepr);
 
@@ -80,6 +80,27 @@ impl Window {
 }
 
 impl Window {
+    /// Executes an arbitrary function in the window thread, blocking until it returns.
+    ///
+    /// This is **not** how functions such as [`set_visible`](Self::set_visible) are implemented,
+    /// but rather a way to guarantee that native low-level calls are executed in the remote thread if necessary,
+    /// especially on platforms like Win32 that make excessive use of thread globals.
+    ///
+    /// ```no_run
+    /// # let window = ramen::window::Window::builder().build().unwrap();
+    /// window.execute(|window| {
+    ///     println!("Hello from the window thread!");
+    ///     window.set_title("hi"); // window accessible
+    /// });
+    /// ```
+    #[inline]
+    pub fn execute<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&Self) -> T + Send,
+    {
+        self.0.execute(move || f(self))
+    }
+
     #[inline]
     pub fn events(&self) -> &[Event] {
         self.0.events()
@@ -94,17 +115,17 @@ impl Window {
     ///
     /// It should be preferred to cache this and process events to listen for changes,
     /// as it requires a wait for the window thread.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// The [`Size`] variant will depend on the one supplied to
     /// [`Window::set_inner_size`] or [`WindowBuilder::inner_size`].\
     /// For more information on the DPI scaling system, read the documentation
     /// on either of those two functions.
-    /// 
+    ///
     /// Regardless of DPI mode, with the provided [`Scale`]
     /// the returned value can be converted to either unit:
-    /// 
+    ///
     /// ```no_run
     /// # let window = ramen::window::Window::builder().build().unwrap();
     /// let (size, scale) = window.inner_size();
@@ -133,8 +154,8 @@ impl Window {
     }
 
     /// BRUH
-    /// 
-    /// 
+    ///
+    ///
     /// If the size provided is [`Logical`](Size::Logical), the window will scale accordingly
     /// if the DPI changes (for example by being dragged onto a different monitor, or changing settings).
     /// If it's [`Physical`](Size::Physical) then no scaling will be done and it'll be treated as an exact pixel value.
@@ -257,7 +278,7 @@ impl WindowBuilder {
     /// If the size provided is [`Logical`](Size::Logical), the window will scale accordingly
     /// if the DPI changes (for example by being dragged onto a different monitor, or changing settings).
     /// If it's [`Physical`](Size::Physical) then no scaling will be done and it'll be treated as an exact pixel value.
-    /// 
+    ///
     /// Defaults to `Size::Logical(800.0, 608.0)`.
     #[inline]
     pub fn inner_size(&mut self, inner_size: Size) -> &mut Self {

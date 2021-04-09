@@ -26,13 +26,14 @@ const HOOKPROC_MARKER: &[u8; 4] = b"viri";
 
 // Custom window messages (see `window_proc` for docs)
 const RAMEN_WM_DROP:          UINT = WM_USER + 0;
-const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 1; // TODO:
-const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 2;
-const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 3; // TODO:
-const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 4;
-const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 5;
-const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 6;
-const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 7;
+const RAMEN_WM_EXECUTE:       UINT = WM_USER + 1; // TODO:
+const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 2; // TODO:
+const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 3;
+const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 4; // TODO:
+const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 5;
+const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 6;
+const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 7;
+const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 8;
 
 /// Retrieves the base module [`HINSTANCE`].
 #[inline]
@@ -543,6 +544,25 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
 }
 
 impl WindowImpl {
+    #[inline]
+    pub fn execute<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce() -> T + Send,
+    {
+        let mut result = mem::MaybeUninit::<T>::uninit();
+
+        // SAFETY: `SendMessageW` blocks until WindowProc has responded.
+        let out_ptr = result.as_mut_ptr();
+        let mut f = Some(Box::new(move || unsafe {
+            *out_ptr = f();
+        }) as Box<dyn FnOnce()>);
+
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_EXECUTE, (&mut f) as *mut _ as WPARAM, 0);
+            result.assume_init()
+        }
+    }
+
     pub fn events(&self) -> &[Event] {
         // the backbuffer contains "last" events, so use *not* the active one
         let user_data = unsafe { &*self.user };
@@ -1025,6 +1045,20 @@ unsafe extern "system" fn window_proc(
         RAMEN_WM_DROP => {
             user_data(hwnd).destroy_flag.store(true, atomic::Ordering::Release);
             let _ = DestroyWindow(hwnd);
+            0
+        },
+
+
+        // Custom message: Execute a closure inside the window thread.
+        // wParam: `*mut Option<Box<dyn FnOnce()>>`
+        // lParam: Unused, set to zero.
+        // Return 0.
+        RAMEN_WM_EXECUTE => {
+            // `FnOnce` requires the closure to consume itself, so it's done like this!
+            let option = &mut *(wparam as *mut Option<Box<dyn FnOnce()>>);
+            if let Some(f) = option.take() {
+                f();
+            }
             0
         },
 
