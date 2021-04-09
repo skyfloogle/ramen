@@ -86,17 +86,20 @@ impl Window {
     /// but rather a way to guarantee that native low-level calls are executed in the remote thread if necessary,
     /// especially on platforms like Win32 that make excessive use of thread globals.
     ///
+    /// # Example
+    /// Note that you can choose to yield a value of any type from the closure:
     /// ```no_run
     /// # let window = ramen::window::Window::builder().build().unwrap();
     /// let result = window.execute(|window| {
     ///     window.set_title("hi from the window thread");
-    ///     1337
+    ///     1702
     /// });
     /// ```
     #[inline]
     pub fn execute<F, T>(&self, f: F) -> T
     where
-        F: FnOnce(&Self) -> T + Send,
+        F: Send + FnOnce(&Self) -> T,
+        T: Send,
     {
         self.0.execute(move || f(self))
     }

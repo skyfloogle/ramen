@@ -547,7 +547,8 @@ impl WindowImpl {
     #[inline]
     pub fn execute<F, T>(&self, f: F) -> T
     where
-        F: FnOnce() -> T + Send,
+        F: Send + FnOnce() -> T,
+        T: Send,
     {
         let mut result = mem::MaybeUninit::<T>::uninit();
 
