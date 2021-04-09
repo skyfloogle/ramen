@@ -964,6 +964,20 @@ unsafe extern "system" fn window_proc(
         // Return non-zero on erase.
         WM_ERASEBKGND => TRUE as LRESULT,
 
+        // Received when the window is about to be shown or hidden.
+        // wParam: `TRUE` if shown, `FALSE` if hidden.
+        // lParam: The reason this message is sent (see MSDN).
+        // Return 0.
+        WM_SHOWWINDOW => {
+            // If `lparam == 0`, this was received from `ShowWindow` or `ShowWindowAsync`
+            if lparam == 0 {
+                // If this isn't updated here, the next style change will re-hide the window.
+                // It won't redraw either so it'll be stale on the screen until interacted with.
+                user_data(hwnd).style.visible = wparam != 0;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+
         // Supposedly `WM_ACTIVATE`, but only received if the focus is to a different application.
         // This doesn't seem to be actually true, and it even has the same bugs as `WM_ACTIVATE`.
         // For this reason (and being useless and confusing) it should be ignored. Return 0.
