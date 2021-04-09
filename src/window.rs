@@ -57,6 +57,53 @@ impl Default for Controls {
     }
 }
 
+/// yeah
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum Cursor {
+    /// ⇖
+    Arrow = 0,
+
+    /// (Invisible)
+    Blank,
+
+    /// \+
+    Cross,
+
+    /// 👆
+    Hand,
+
+    /// 👆?
+    Help,
+
+    /// I
+    IBeam,
+
+    /// ⇖⌛
+    Progress,
+
+    /// ⤢
+    ResizeNESW,
+
+    /// ↕
+    ResizeNS,
+
+    /// ⤡
+    ResizeNWSE,
+
+    /// ↔
+    ResizeWE,
+
+    /// ✥
+    ResizeAll,
+
+    /// 🚫
+    Unavailable,
+
+    /// ⌛
+    Wait,
+}
+
 /// Represents an open window. Dropping it closes the window.
 ///
 /// To instantiate windows, use a [`builder`](Self::builder).
