@@ -88,9 +88,9 @@ impl Window {
     ///
     /// ```no_run
     /// # let window = ramen::window::Window::builder().build().unwrap();
-    /// window.execute(|window| {
-    ///     println!("Hello from the window thread!");
-    ///     window.set_title("hi"); // window accessible
+    /// let result = window.execute(|window| {
+    ///     window.set_title("hi from the window thread");
+    ///     1337
     /// });
     /// ```
     #[inline]
