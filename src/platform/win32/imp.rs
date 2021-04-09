@@ -661,7 +661,7 @@ impl WindowImplData {
             } else {
                 &mut self.ev_buf_secondary
             };
-            if *lock == true || !ev_buf.push_many(events) {
+            if *lock || !ev_buf.push_many(events) {
                 *lock = true; // "the condvar should be pinged"
                 sync::condvar_wait(&self.ev_buf_ping, &mut lock);
             } else {
