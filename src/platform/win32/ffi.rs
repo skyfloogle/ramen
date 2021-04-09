@@ -91,6 +91,26 @@ pub const GWL_STYLE: c_int = -16;
 pub const GWL_USERDATA: c_int = -21;
 pub const HCBT_DESTROYWND: c_int = 4;
 pub const HTCAPTION: LRESULT = 2;
+pub const IDC_APPSTARTING: *const WCHAR = 32650 as *const WCHAR;
+pub const IDC_ARROW: *const WCHAR = 32512 as *const WCHAR;
+pub const IDC_CROSS: *const WCHAR = 32515 as *const WCHAR;
+pub const IDC_HAND: *const WCHAR = 32649 as *const WCHAR;
+pub const IDC_HELP: *const WCHAR = 32651 as *const WCHAR;
+pub const IDC_IBEAM: *const WCHAR = 32513 as *const WCHAR;
+pub const IDC_ICON: *const WCHAR = 32641 as *const WCHAR;
+pub const IDC_NO: *const WCHAR = 32648 as *const WCHAR;
+pub const IDC_SIZE: *const WCHAR = 32640 as *const WCHAR;
+pub const IDC_SIZEALL: *const WCHAR = 32646 as *const WCHAR;
+pub const IDC_SIZENESW: *const WCHAR = 32643 as *const WCHAR;
+pub const IDC_SIZENS: *const WCHAR = 32645 as *const WCHAR;
+pub const IDC_SIZENWSE: *const WCHAR = 32642 as *const WCHAR;
+pub const IDC_SIZEWE: *const WCHAR = 32644 as *const WCHAR;
+pub const IDC_UPARROW: *const WCHAR = 32516 as *const WCHAR;
+pub const IDC_WAIT: *const WCHAR = 32514 as *const WCHAR;
+pub const IMAGE_CURSOR: UINT = 2;
+pub const HTCLIENT: LRESULT = 1;
+pub const LR_DEFAULTSIZE: UINT = 0x00000040;
+pub const LR_SHARED: UINT = 0x00008000;
 pub const MF_BYCOMMAND: UINT = 0x00000000;
 pub const MF_DISABLED: UINT = 0x00000002;
 pub const MF_ENABLED: UINT = 0x00000000;
@@ -144,6 +164,7 @@ pub const WM_CLOSE: UINT = 0x0010;
 pub const WM_ERASEBKGND: UINT = 0x0014;
 pub const WM_SHOWWINDOW: UINT = 0x0018;
 pub const WM_ACTIVATEAPP: UINT = 0x001C;
+pub const WM_SETCURSOR: UINT = 0x0020;
 pub const WM_NCCREATE: UINT = 0x0081;
 pub const WM_NCDESTROY: UINT = 0x0082;
 pub const WM_NCLBUTTONDOWN: UINT = 0x00A1;
@@ -309,6 +330,7 @@ extern "system" {
     pub fn GetWindowRect(hWnd: HWND, lpRect: *mut RECT) -> BOOL;
     pub fn GetTitleBarInfo(hwnd: HWND, pti: *mut TITLEBARINFO) -> BOOL;
     pub fn SetWindowPos(hWnd: HWND, hWndInsertAfter: HWND, X: c_int, Y: c_int, cx: c_int, cy: c_int, uFlags: UINT) -> BOOL;
+    pub fn WindowFromPoint(Point: POINT) -> HWND;
     pub fn DestroyWindow(hWnd: HWND) -> BOOL;
 
     // Hooking API
@@ -337,12 +359,14 @@ extern "system" {
     pub fn ReleaseCapture() -> BOOL;
     pub fn GetAsyncKeyState(vKey: c_int) -> SHORT;
     pub fn GetSystemMetrics(nIndex: c_int) -> c_int;
+    pub fn SetCursor(hCursor: HCURSOR) -> HCURSOR;
 
     // Misc legacy garbage
     pub fn EnableMenuItem(hMenu: HMENU, uIDEnableItem: UINT, uEnable: UINT) -> BOOL;
     pub fn GetSystemMenu(hWnd: HWND, bRevert: BOOL) -> HMENU;
 
-    // Why is this in User32
+    // Yeah, whatever
+    pub fn LoadImageW(hInst: HINSTANCE, name: *const WCHAR, type_: UINT, cx: c_int, cy: c_int, fuLoad: UINT) -> HANDLE;
     pub fn PtInRect(lprc: *const RECT, pt: POINT) -> BOOL;
 
     // Class/window storage manipulation

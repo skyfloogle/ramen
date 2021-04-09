@@ -3,7 +3,7 @@ use crate::{
     event::{CloseReason, Event},
     monitor::{Point, Scale, Size},
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
-    window::{self, WindowBuilder},
+    window::{self, Cursor, WindowBuilder},
 };
 use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 
@@ -29,11 +29,12 @@ const RAMEN_WM_DROP:          UINT = WM_USER + 0;
 const RAMEN_WM_EXECUTE:       UINT = WM_USER + 1; // TODO:
 const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 2; // TODO:
 const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 3;
-const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 4; // TODO:
-const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 5;
-const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 6;
-const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 7;
-const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 8;
+const RAMEN_WM_SETCURSOR:     UINT = WM_USER + 4;
+const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 5; // TODO:
+const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 6;
+const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 7;
+const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 8;
+const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 9;
 
 /// Retrieves the base module [`HINSTANCE`].
 #[inline]
@@ -160,6 +161,25 @@ unsafe fn adjust_window_for_dpi(
         let _ = AdjustWindowRectEx(&mut window, style, FALSE, style_ex);
     }
     rect_to_size2d(&window)
+}
+
+fn cursor_to_int_resource(cursor: Cursor) -> *const WCHAR {
+    match cursor {
+        Cursor::Arrow => IDC_ARROW,
+        Cursor::Blank => ptr::null(),
+        Cursor::Cross => IDC_CROSS,
+        Cursor::Hand => IDC_HAND,
+        Cursor::Help => IDC_HELP,
+        Cursor::IBeam => IDC_IBEAM,
+        Cursor::Progress => IDC_APPSTARTING,
+        Cursor::ResizeNESW => IDC_SIZENESW,
+        Cursor::ResizeNS => IDC_SIZENS,
+        Cursor::ResizeNWSE => IDC_SIZENWSE,
+        Cursor::ResizeWE => IDC_SIZEWE,
+        Cursor::ResizeAll => IDC_SIZEALL,
+        Cursor::Unavailable => IDC_NO,
+        Cursor::Wait => IDC_WAIT,
+    }
 }
 
 #[inline]
@@ -346,6 +366,9 @@ pub struct WindowImplData {
     /// The current (as in, where the window is) monitor DPI.
     current_dpi: UINT,
 
+    /// The cursor sent to `WM_SETCURSOR`
+    cursor: HCURSOR,
+
     /// Whether things should be scaled according to DPI.
     is_dpi_logical: bool,
 
@@ -433,6 +456,14 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             client_area_size: builder.inner_size.as_physical(dpi as f64 / BASE_DPI as f64),
             close_reason: None, // unknown
             current_dpi: dpi,
+            cursor: {
+                let rsrc = cursor_to_int_resource(builder.cursor);
+                if !rsrc.is_null() {
+                    LoadImageW(ptr::null_mut(), rsrc, IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE | LR_SHARED).cast()
+                } else {
+                    ptr::null_mut()
+                }
+            },
             is_dpi_logical: matches!(builder.inner_size, Size::Logical(..)),
             destroy_flag: atomic::AtomicBool::new(false),
             style: builder.style.clone(),
@@ -600,6 +631,20 @@ impl WindowImpl {
     }
 
     #[inline]
+    pub fn set_cursor(&self, cursor: Cursor) {
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETCURSOR, cursor as u32 as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_cursor_async(&self, cursor: Cursor) {
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_SETCURSOR, cursor as u32 as WPARAM, 0);
+        }
+    }
+
+    #[inline]
     pub fn set_controls_async(&self, controls: Option<window::Controls>) {
         let controls = controls.map(|c| c.to_bits()).unwrap_or(!0);
         unsafe {
@@ -744,6 +789,15 @@ unsafe fn set_close_button(hwnd: HWND, enabled: bool) {
         MF_BYCOMMAND | MF_DISABLED | MF_GRAYED
     };
     let _ = EnableMenuItem(menu, SC_CLOSE as UINT, flag);
+}
+
+/// Client area -> Screen space
+unsafe fn client_area_screen_space(hwnd: HWND) -> RECT {
+    let mut client_area: RECT = mem::zeroed();
+    let _ = GetClientRect(hwnd, &mut client_area);
+    let _ = ClientToScreen(hwnd, &mut client_area.left as *mut _ as *mut POINT);
+    let _ = ClientToScreen(hwnd, &mut client_area.right as *mut _ as *mut POINT);
+    client_area
 }
 
 #[inline]
@@ -987,6 +1041,21 @@ unsafe extern "system" fn window_proc(
         // See also: `WM_ACTIVATE`
         WM_ACTIVATEAPP => 0,
 
+
+        // Received when the cursor should be set.
+        // wParam: `HWND` which has the cursor in it.
+        // lParam: LOWORD is a hit-test, HIWORD indicates sender (see MSDN).
+        // Return TRUE if processed or FALSE to continue asking child windows.
+        WM_SETCURSOR => {
+            // We handle it in the client area, otherwise it's not our business.
+            if hwnd == wparam as HWND && lparam & 0xFFFF == HTCLIENT {
+                let _ = SetCursor(user_data(hwnd).cursor);
+                TRUE as LRESULT
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        },
+
         // Received when the non-client area of the window is about to be created.
         // This is *before* `WM_CREATE` and is basically the first event received.
         // wParam: Unused, should be ignored.
@@ -1102,6 +1171,33 @@ unsafe extern "system" fn window_proc(
 
                 // Set styles, refresh
                 update_window_style(hwnd, &user_data.style);
+            }
+            0
+        },
+
+        // Custom event: Set the window cursor that's sent to `WM_SETCURSOR`.
+        // wParam: `Cursor as u32`
+        // lParam: Unused, set to zero.
+        // Return 0.
+        RAMEN_WM_SETCURSOR => {
+            let user_data = user_data(hwnd);
+            let cursor = mem::transmute::<_, Cursor>(wparam as u32);
+            let rsrc = cursor_to_int_resource(cursor);
+
+            // `LoadImageW` is not only superseding `LoadCursorW` but it's ~20µs faster. Wow, use this!
+            user_data.cursor = if !rsrc.is_null() {
+                LoadImageW(ptr::null_mut(), rsrc, IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE | LR_SHARED).cast()
+            } else {
+                ptr::null_mut()
+            };
+
+            // Immediately update the cursor icon if it's within the client area.
+            let mut mouse_pos: POINT = mem::zeroed();
+            if GetCursorPos(&mut mouse_pos) != 0 && WindowFromPoint(POINT { ..mouse_pos }) == hwnd {
+                let client_area = client_area_screen_space(hwnd);
+                if PtInRect(&client_area, mouse_pos) != 0 {
+                    let _ = SetCursor(user_data.cursor);
+                }
             }
             0
         },

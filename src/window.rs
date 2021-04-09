@@ -58,7 +58,7 @@ impl Default for Controls {
 }
 
 /// yeah
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Cursor {
     /// ⇖
@@ -115,6 +115,7 @@ pub struct Window(imp::WindowRepr);
 #[derive(Clone)]
 pub struct WindowBuilder {
     pub(crate) class_name: MaybeArc<str>,
+    pub(crate) cursor: Cursor,
     pub(crate) inner_size: Size,
     pub(crate) style: Style,
     pub(crate) title: MaybeArc<str>,
@@ -203,6 +204,18 @@ impl Window {
         self.0.set_controls_async(controls);
     }
 
+    /// Sets the cursor that's shown when the mouse is inside of the window's inner area.
+    #[inline]
+    pub fn set_cursor(&self, cursor: Cursor) {
+        self.0.set_cursor(cursor);
+    }
+
+    /// SNon-blocking variant of [`set_cursor`](Self::set_cursor).
+    #[inline]
+    pub fn set_cursor_async(&self, cursor: Cursor) {
+        self.0.set_cursor_async(cursor);
+    }
+
     /// BRUH
     ///
     ///
@@ -259,6 +272,7 @@ impl WindowBuilder {
     pub(crate) const fn new() -> Self {
         Self {
             class_name: MaybeArc::Static("ramen_window"),
+            cursor: Cursor::Arrow,
             inner_size: Size::Logical(800.0, 608.0),
             style: Style {
                 borderless: false,
@@ -320,6 +334,15 @@ impl WindowBuilder {
     #[inline]
     pub fn controls(&mut self, controls: Option<Controls>) -> &mut Self {
         self.style.controls = controls;
+        self
+    }
+
+    /// Sets the initial cursor shown in the window.
+    ///
+    /// Defaults to [`Cursor::Arrow`].
+    #[inline]
+    pub fn cursor(&mut self, cursor: Cursor) -> &mut Self {
+        self.cursor = cursor;
         self
     }
 
