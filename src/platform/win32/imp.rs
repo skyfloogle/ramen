@@ -565,7 +565,9 @@ impl WindowImpl {
     }
 
     pub fn events(&self) -> &[Event] {
-        // the backbuffer contains "last" events, so use *not* the active one
+        // SAFETY: The event buffer isn't swapped until `swap_events` is called (takes &mut self)
+
+        // The backbuffer contains the "last" events, so use the opposite the active one
         let user_data = unsafe { &*self.user };
         if user_data.ev_buf_is_primary {
             user_data.ev_buf_secondary.slice()
