@@ -5,6 +5,10 @@
 #[macro_use]
 pub(crate) mod util;
 
+#[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+#[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+pub mod input;
+
 pub mod error;
 pub mod event;
 pub mod monitor;
