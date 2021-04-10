@@ -1,7 +1,7 @@
 // win32 api goes here
 
 // TODO: Remove `dead_code` when all is done
-#![allow(bad_style, dead_code, overflowing_literals)]
+#![allow(bad_style, dead_code, overflowing_literals, clippy::upper_case_acronyms)]
 
 // Opaque handles
 macro_rules! def_handle {

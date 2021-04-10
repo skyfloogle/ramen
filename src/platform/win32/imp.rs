@@ -1,3 +1,12 @@
+#![allow(
+    // "WM_USER + 0" is good C constant semantics.
+    clippy::identity_op,
+
+    // "This lint cannot detect if the mutex is actually used for waiting before a critical section."
+    // Which it is being used for.
+    clippy::mutex_atomic,
+)]
+
 use crate::{
     error::Error,
     event::{CloseReason, Event},
@@ -131,9 +140,9 @@ impl Win32State {
             };
 
             Self {
-                dl,
-                dpi_mode,
                 at_least_anniversary_update,
+                dpi_mode,
+                dl,
             }
         }
     }
@@ -502,10 +511,8 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             (&mut create_params) as *mut _ as *mut c_void,
         );
 
-        if hwnd.is_null() {
-            if create_params.error.is_none() {
-                // TODO: Push create failure
-            }
+        if hwnd.is_null() && create_params.error.is_none() {
+            // TODO: Push create failure
         }
 
         let (mutex, condvar) = &*recv2;
@@ -545,7 +552,7 @@ pub fn spawn_window(builder: &WindowBuilder) -> Result<WindowImpl, Error> {
             // This is one of the main motives (besides no blocking) to give each window a thread.
             match GetMessageW(&mut msg, ptr::null_mut(), 0, 0) {
                 -1 => panic!("Hard error {:#06X} in GetMessageW loop!", GetLastError()),
-                0 => if (&*user_data.get()).destroy_flag.load(atomic::Ordering::Acquire) {
+                0 => if (*user_data.get()).destroy_flag.load(atomic::Ordering::Acquire) {
                     break 'message_loop
                 },
                 _ => {
@@ -1294,7 +1301,7 @@ unsafe extern "system" fn window_proc(
                 let _ = DefWindowProcW(hwnd, WM_SETTEXT, 0, wstr.as_ptr() as LPARAM);
                 mem::drop(wstr); // managed by callee, caller should `mem::forget`
             } else {
-                let _ = DefWindowProcW(hwnd, WM_SETTEXT, 0, [0x00 as WCHAR].as_ptr() as LPARAM);
+                let _ = DefWindowProcW(hwnd, WM_SETTEXT, 0, [WCHAR::default()].as_ptr() as LPARAM);
             }
             0
         },
@@ -1642,7 +1649,7 @@ fn sys_key_event(wparam: WPARAM, lparam: LPARAM) -> Option<Event> {
 
 #[cfg(feature = "input")]
 fn extend_key(key: Key, lparam: LPARAM) -> Key {
-    let scancode = (lparam & 0x00FF0000) >> 16 as u8;
+    let scancode = (lparam & 0x00FF0000) >> 16u8;
     let extended_bit = (lparam & (1 << 24)) != 0;
 
     match key {
