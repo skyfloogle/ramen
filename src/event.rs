@@ -51,6 +51,21 @@ pub enum Event {
     #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
     MouseUp(MouseButton),
 
+    /// A [`Key`] was pressed.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    KeyboardDown(Key),
+
+    /// A [`Key`] was auto-repeated by the system.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    KeyboardRepeat(Key),
+
+    /// A [`Key`] was released.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    KeyboardUp(Key),
+
     /// The position of the mouse inside the window has been updated.
     ///
     /// The associated values work the same as [`Event::Resize`].
@@ -62,6 +77,104 @@ pub enum Event {
     ///
     /// For more info, see: [`Window::inner_size`](crate::window::Window::inner_size)
     Resize((Size, Scale)),
+}
+
+/// Represents a button on the keyboard.
+#[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+#[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Key {
+    Attn,
+    LAlt,
+    RAlt,
+    Applications,
+    Backspace,
+    CapsLock,
+    Clear,
+    LControl,
+    RControl,
+    CrSel,
+    Delete,
+    End,
+    Enter,
+    EraseEof,
+    Escape,
+    Execute,
+    ExSel,
+    Help,
+    Home,
+    Insert,
+    NumLock,
+    Pa1,
+    PageUp,
+    PageDown,
+    Pause,
+    Play,
+    Print,
+    PrintScreen,
+    LShift,
+    RShift,
+    ScrollLock,
+    Select,
+    Sleep,
+    Space,
+    LSuper,
+    RSuper,
+    Tab,
+    Zoom,
+
+    Left, Up, Right, Down,
+
+    Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
+    A, B, C, D, E, F, G, H, I, J, K, L, M,
+    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    Comma, Minus, Period, Plus,
+    Oem1, Oem2, Oem3, Oem4, Oem5, Oem6, Oem7, Oem8,
+    Oem102, OemClear,
+
+    Add, Subtract, Multiply, Divide,
+    Decimal, Separator,
+    Numpad0, Numpad1, Numpad2, Numpad3, Numpad4,
+    Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+
+    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24,
+
+    BrowserBack,
+    BrowserFavourites,
+    BrowserForward,
+    BrowserHome,
+    BrowserRefresh,
+    BrowserSearch,
+    BrowserStop,
+
+    ImeAccept,
+    ImeConvert,
+    ImeNonConvert,
+    ImeFinal,
+    ImeModeChange,
+    ImeProcess,
+    ImeOn,
+    ImeOff,
+
+    // TODO: better understanding of these
+    ImeKana,
+    ImeKanji,
+    ImeJunja,
+
+    MediaNextTrack,
+    MediaPreviousTrack,
+    MediaPlayPause,
+    MediaStop,
+
+    VolumeDown,
+    VolumeUp,
+    VolumeMute,
+
+    LaunchApplication1,
+    LaunchApplication2,
+    LaunchMail, // what the fuck?
+    LaunchMediaSelect,
 }
 
 /// Represents a button on the mouse.
