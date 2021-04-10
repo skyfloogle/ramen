@@ -1,14 +1,14 @@
 use crate::{
     error::Error,
     event::{CloseReason, Event},
-    monitor::{Point, Scale, Size},
+    monitor::{Scale, Size},
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, Cursor, WindowBuilder},
 };
 use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 
 #[cfg(feature = "input")]
-use crate::event::{Key, MouseButton};
+use crate::{event::{Key, MouseButton}, monitor::Point};
 
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
@@ -1151,10 +1151,10 @@ unsafe extern "system" fn window_proc(
         // lParam: loword = signed X coordinate, hiword = signed Y coordinate
         // Return 0.
         WM_MOUSEMOVE => {
-            let user_data = user_data(hwnd);
-
             #[cfg(feature = "input")]
             {
+                let user_data = user_data(hwnd);
+
                 // TODO: Relative coordinates, mouse warp, touchscreen etc. God damn.
                 let (cw, ch) = user_data.client_area_size;
                 let (x, y) = (
@@ -1189,12 +1189,12 @@ unsafe extern "system" fn window_proc(
         WM_RBUTTONUP => mouse_event!(MouseUp, Right),
         WM_MBUTTONDOWN => mouse_event!(MouseDown, Middle),
         WM_MBUTTONUP => mouse_event!(MouseUp, Middle),
-        ev @ WM_XBUTTONDOWN | ev @ WM_XBUTTONUP => {
+        _ev @ WM_XBUTTONDOWN | _ev @ WM_XBUTTONUP => {
             #[cfg(feature = "input")]
             {
                 // For X buttons, the HIWORD in wParam indicates which X button it is.
                 let user_data = user_data(hwnd);
-                let event = if ev == WM_XBUTTONDOWN {
+                let event = if _ev == WM_XBUTTONDOWN {
                     Event::MouseDown
                 } else {
                     Event::MouseUp

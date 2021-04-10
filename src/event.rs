@@ -1,4 +1,7 @@
-use crate::monitor::{Point, Scale, Size};
+use crate::monitor::{Scale, Size};
+
+#[cfg(feature = "input")]
+use crate::monitor::Point;
 
 /// Details the source of [`Event::CloseRequest`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
