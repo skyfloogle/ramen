@@ -19,6 +19,7 @@ pub enum CloseReason {
     Unknown,
 }
 
+/// An event received from the event loop of a [`Window`](crate::window::Window).
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Event {
@@ -40,6 +41,16 @@ pub enum Event {
     #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
     MouseFocus(bool),
 
+    /// A [`MouseButton`] was pressed.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    MouseDown(MouseButton),
+
+    /// A [`MouseButton`] was released.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    MouseUp(MouseButton),
+
     /// The position of the mouse inside the window has been updated.
     ///
     /// The associated values work the same as [`Event::Resize`].
@@ -51,4 +62,25 @@ pub enum Event {
     ///
     /// For more info, see: [`Window::inner_size`](crate::window::Window::inner_size)
     Resize((Size, Scale)),
+}
+
+/// Represents a button on the mouse.
+#[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+#[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MouseButton {
+    /// Left Mouse Button
+    Left,
+
+    /// Right Mouse Button
+    Right,
+
+    /// M3, sometimes known as "middle mouse" or the scroll wheel button
+    Middle,
+
+    /// M4, sometimes known as XButton1
+    Mouse4,
+
+    /// M5, sometimes known as XButton2
+    Mouse5,
 }

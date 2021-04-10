@@ -7,6 +7,9 @@ use crate::{
 };
 use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
 
+#[cfg(feature = "input")]
+use crate::event::MouseButton;
+
 // TODO: Maybe deglob
 use crate::platform::win32::ffi::*;
 
@@ -834,6 +837,15 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    macro_rules! mouse_event {
+        ($v:ident , $b:ident) => {{
+            #[cfg(feature = "input")] {
+                user_data(hwnd).push_event(Event::$v(MouseButton::$b));
+            }
+            0
+        }};
+    }
+
     // Fantastic resource for a list of window messages:
     // https://wiki.winehq.org/List_Of_Windows_Messages
     match msg {
@@ -1122,6 +1134,34 @@ unsafe extern "system" fn window_proc(
                 }
             }
 
+            0
+        },
+
+        // Received when the mouse buttons are down/up. Return 0.
+        // wParam indicates what other buttons are down.
+        // lParam contains the X and Y coordinate.
+        WM_LBUTTONDOWN => mouse_event!(MouseDown, Left),
+        WM_LBUTTONUP => mouse_event!(MouseUp, Left),
+        WM_RBUTTONDOWN => mouse_event!(MouseDown, Right),
+        WM_RBUTTONUP => mouse_event!(MouseUp, Right),
+        WM_MBUTTONDOWN => mouse_event!(MouseDown, Middle),
+        WM_MBUTTONUP => mouse_event!(MouseUp, Middle),
+        ev @ WM_XBUTTONDOWN | ev @ WM_XBUTTONUP => {
+            #[cfg(feature = "input")]
+            {
+                // For X buttons, the HIWORD in wParam indicates which X button it is.
+                let user_data = user_data(hwnd);
+                let event = if ev == WM_XBUTTONDOWN {
+                    Event::MouseDown
+                } else {
+                    Event::MouseUp
+                };
+                match ((wparam >> 16) & 0xFFFF) as WORD {
+                    XBUTTON1 => user_data.push_event(event(MouseButton::Mouse4)),
+                    XBUTTON2 => user_data.push_event(event(MouseButton::Mouse5)),
+                    _ => (),
+                }
+            }
             0
         },
 
