@@ -39,10 +39,10 @@ const HOOKPROC_MARKER: &[u8; 4] = b"viri";
 // Custom window messages (see `window_proc` for docs)
 const RAMEN_WM_DROP:          UINT = WM_USER + 0;
 const RAMEN_WM_EXECUTE:       UINT = WM_USER + 1; // TODO:
-const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 2; // TODO:
+// const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 2; // TODO:
 const RAMEN_WM_SETCONTROLS:   UINT = WM_USER + 3;
 const RAMEN_WM_SETCURSOR:     UINT = WM_USER + 4;
-const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 5; // TODO:
+// const RAMEN_WM_SETFULLSCREEN: UINT = WM_USER + 5; // TODO:
 const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 6;
 const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 7;
 const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 8;
