@@ -14,7 +14,7 @@ use crate::{
     util::{sync::{self, Condvar, Mutex}, FixedVec, LazyCell},
     window::{self, Cursor, WindowBuilder},
 };
-use std::{cell::UnsafeCell, mem, ops, ptr, sync::{atomic, Arc}, thread};
+use std::{cell::UnsafeCell, mem, num::NonZeroI32, ops, ptr, sync::{atomic, Arc}, thread};
 
 #[cfg(feature = "input")]
 use crate::{event::{Key, MouseButton}, monitor::Point};
@@ -1236,7 +1236,9 @@ unsafe extern "system" fn window_proc(
             #[cfg(feature = "input")]
             {
                 let delta = ((wparam >> 16) & 0xFFFF) as c_short;
-                user_data(hwnd).push_event(Event::MouseWheel(i32::from(delta)));
+                if delta != 0 {
+                    user_data(hwnd).push_event(Event::MouseWheel(NonZeroI32::new_unchecked(delta.into())));
+                }
             }
             0
         },

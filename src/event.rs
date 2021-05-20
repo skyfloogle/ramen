@@ -1,4 +1,5 @@
 use crate::monitor::{Scale, Size};
+use std::num::NonZeroI32;
 
 #[cfg(feature = "input")]
 use crate::monitor::Point;
@@ -60,7 +61,7 @@ pub enum Event {
     /// Positive if scrolling upwards, negative if scrolling downwards.
     #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
     #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
-    MouseWheel(i32),
+    MouseWheel(NonZeroI32),
 
     /// A [`Key`] was pressed.
     #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
