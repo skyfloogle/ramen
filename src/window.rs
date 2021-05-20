@@ -107,7 +107,7 @@ pub enum Cursor {
 /// Represents an open window. Dropping it closes the window.
 ///
 /// To instantiate windows, use a [`builder`](Self::builder).
-pub struct Window(imp::WindowRepr);
+pub struct Window(pub(crate) imp::WindowRepr);
 
 /// Builder for creating [`Window`] instances.
 ///
@@ -210,7 +210,7 @@ impl Window {
         self.0.set_cursor(cursor);
     }
 
-    /// SNon-blocking variant of [`set_cursor`](Self::set_cursor).
+    /// Non-blocking variant of [`set_cursor`](Self::set_cursor).
     #[inline]
     pub fn set_cursor_async(&self, cursor: Cursor) {
         self.0.set_cursor_async(cursor);

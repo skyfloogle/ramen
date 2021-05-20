@@ -319,6 +319,19 @@ pub struct WindowImpl {
 unsafe impl Send for WindowImpl {}
 unsafe impl Sync for WindowImpl {}
 
+/// Win32 specific extensions to the [`Window`](crate::window::Window) API.
+pub trait WindowExt {
+    /// Gets the Win32 window handle (a.k.a. [`HWND`]).
+    fn hwnd(&self) -> HWND;
+}
+
+impl WindowExt for window::Window {
+    #[inline]
+    fn hwnd(&self) -> HWND {
+        self.0.hwnd
+    }
+}
+
 /// Win32 specific extensions to the [`WindowBuilder`](crate::window::WindowBuilder) API.
 ///
 /// # Example

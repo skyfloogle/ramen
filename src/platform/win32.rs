@@ -9,4 +9,4 @@ pub(crate) type WindowRepr = imp::WindowImpl;
 
 // Bonus
 pub use ffi::{HINSTANCE, HMONITOR, HWND};
-pub use imp::{this_hinstance, WindowBuilderExt};
+pub use imp::{this_hinstance, WindowExt, WindowBuilderExt};
