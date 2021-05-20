@@ -54,6 +54,14 @@ pub enum Event {
     #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
     MouseUp(MouseButton),
 
+    /// A mouse scrollwheel has been scrolled up or down over the window.
+    ///
+    /// The associated value is in eighths of a degree, typically 120 (15 degrees).
+    /// Positive if scrolling upwards, negative if scrolling downwards.
+    #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
+    #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]
+    MouseWheel(i32),
+
     /// A [`Key`] was pressed.
     #[cfg_attr(feature = "nightly-docs", doc(cfg(feature = "input")))]
     #[cfg_attr(not(feature = "nightly-docs"), cfg(feature = "input"))]

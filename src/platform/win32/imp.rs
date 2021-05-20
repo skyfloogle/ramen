@@ -1228,6 +1228,19 @@ unsafe extern "system" fn window_proc(
             0
         },
 
+        // Received when the mouse wheel is rotated.
+        // wParam: HIWORD=delta in WHEEL_DELTA(120) multiples, LOWORD=vk state (see msdn)
+        // lParam: HIWORD=mouse x, LOWORD=mouse y
+        // Return 0.
+        WM_MOUSEWHEEL => {
+            #[cfg(feature = "input")]
+            {
+                let delta = ((wparam >> 16) & 0xFFFF) as c_short;
+                user_data(hwnd).push_event(Event::MouseWheel(i32::from(delta)));
+            }
+            0
+        },
+
         // Custom message: The "real" destroy signal that won't be rejected.
         // TODO: document the rejection emchanism somewhere
         // Return 0.
