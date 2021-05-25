@@ -47,6 +47,7 @@ const RAMEN_WM_SETTEXT_ASYNC: UINT = WM_USER + 6;
 const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 7;
 const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 8;
 const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 9;
+const RAMEN_WM_ISDPILOGICAL:  UINT = WM_USER + 10;
 
 /// Retrieves the base module [`HINSTANCE`].
 #[inline]
@@ -642,6 +643,13 @@ impl WindowImpl {
                 scale.as_mut_ptr() as LPARAM,
             );
             (size.assume_init(), scale.assume_init())
+        }
+    }
+
+    #[inline]
+    pub fn is_dpi_logical(&self) -> bool {
+        unsafe {
+            SendMessageW(self.hwnd, RAMEN_WM_ISDPILOGICAL, 0, 0) != 0
         }
     }
 
@@ -1390,6 +1398,13 @@ unsafe extern "system" fn window_proc(
             *out_scale = dpi_factor;
 
             0
+        },
+
+        // Custom event: Query whether we're in logical DPI mode. Niche thing.
+        // wParam & lParam: Unused.
+        // Non-zero return if logical.
+        RAMEN_WM_ISDPILOGICAL => {
+            user_data(hwnd).is_dpi_logical as LPARAM
         },
 
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),

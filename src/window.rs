@@ -189,6 +189,11 @@ impl Window {
         self.0.inner_size()
     }
 
+    #[inline]
+    pub fn is_dpi_logical(&self) -> bool {
+        self.0.is_dpi_logical()
+    }
+
     // TODO: borderless
 
     /// Sets the availability of the window controls.
