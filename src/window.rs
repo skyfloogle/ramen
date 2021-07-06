@@ -232,6 +232,16 @@ impl Window {
         self.0.set_inner_size(size)
     }
 
+    #[inline]
+    pub fn set_maximized(&self, maximized: bool) {
+        self.0.set_maximized(maximized)
+    }
+
+    #[inline]
+    pub fn set_maximized_async(&self, maximized: bool) {
+        self.0.set_maximized_async(maximized)
+    }
+
     /// Sets whether the window is resizable by dragging the edges.
     #[inline]
     pub fn set_resizable(&self, resizable: bool) {

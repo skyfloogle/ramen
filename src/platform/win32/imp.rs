@@ -48,6 +48,7 @@ const RAMEN_WM_SETTHICKFRAME: UINT = WM_USER + 7;
 const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 8;
 const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 9;
 const RAMEN_WM_ISDPILOGICAL:  UINT = WM_USER + 10;
+const RAMEN_WM_SETMAXIMIZED:  UINT = WM_USER + 11;
 
 /// Retrieves the base module [`HINSTANCE`].
 #[inline]
@@ -687,6 +688,20 @@ impl WindowImpl {
     pub fn set_inner_size(&self, size: Size) {
         unsafe {
             let _ = SendMessageW(self.hwnd, RAMEN_WM_SETINNERSIZE, 0, (&size) as *const Size as LPARAM);
+        }
+    }
+
+    #[inline]
+    pub fn set_maximized(&self, maximized: bool) {
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETMAXIMIZED, maximized as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_maximized_async(&self, maximized: bool) {
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_SETMAXIMIZED, maximized as WPARAM, 0);
         }
     }
 
@@ -1405,6 +1420,18 @@ unsafe extern "system" fn window_proc(
         // Non-zero return if logical.
         RAMEN_WM_ISDPILOGICAL => {
             user_data(hwnd).is_dpi_logical as LPARAM
+        },
+
+        RAMEN_WM_SETMAXIMIZED => {
+            let user_data = user_data(hwnd);
+            let maximized = wparam != 0;
+            if user_data.is_maximized != maximized {
+                let button = if maximized { SC_MAXIMIZE } else { SC_RESTORE };
+                let _ = DefWindowProcW(hwnd, WM_SYSCOMMAND, button, 0);
+                user_data.is_maximized = maximized;
+                user_data.push_event(Event::Maximize(maximized));
+            }
+            0
         },
 
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
