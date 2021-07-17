@@ -1114,7 +1114,6 @@ unsafe extern "system" fn window_proc(
         WM_WINDOWPOSCHANGING => {
             let param = &*(lparam as *const WINDOWPOS);
             if (param.flags & SWP_NOSIZE) == 0 && param.cx != 0 && param.cy != 0 {
-                println!("cx = {} ; cy = {}; ", param.cx, param.cy);
                 let user_data = user_data(hwnd);
                 let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
                 let (width_adj, height_adj) = adjust_window_for_dpi(
