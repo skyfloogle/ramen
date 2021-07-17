@@ -957,19 +957,19 @@ unsafe extern "system" fn window_proc(
 
             // Minimize events give us a confusing new client size of (0, 0) so we ignore that
             if wparam != SIZE_MINIMIZED {
-                let lhword = ((lparam & 0xFFFF) as WORD as u32, ((lparam >> 16) & 0xFFFF) as WORD as u32);
-                if user_data.client_area_size != lhword {
-                    let (loword, hiword) = lhword;
-                    let inner_size = Size::Physical(loword as u32, hiword as u32);
-                    let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
-                    let event = if user_data.is_dpi_logical {
-                        Event::Resize((inner_size.to_logical(dpi_scale), dpi_scale))
-                    } else {
-                        Event::Resize((inner_size, dpi_scale))
-                    };
-                    user_data.client_area_size = lhword;
-                    let _ = events.push(&event);
-                }
+                // let lhword = ((lparam & 0xFFFF) as WORD as u32, ((lparam >> 16) & 0xFFFF) as WORD as u32);
+                // if user_data.client_area_size != lhword {
+                //     let (loword, hiword) = lhword;
+                //     let inner_size = Size::Physical(loword as u32, hiword as u32);
+                //     let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
+                //     let event = if user_data.is_dpi_logical {
+                //         Event::Resize((inner_size.to_logical(dpi_scale), dpi_scale))
+                //     } else {
+                //         Event::Resize((inner_size, dpi_scale))
+                //     };
+                //     user_data.client_area_size = lhword;
+                //     let _ = events.push(&event);
+                // }
             }
             user_data.push_events(events.slice());
 
@@ -1109,6 +1109,36 @@ unsafe extern "system" fn window_proc(
             } else {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
+        },
+
+        WM_WINDOWPOSCHANGING => {
+            let param = &*(lparam as *const WINDOWPOS);
+            if (param.flags & SWP_NOSIZE) == 0 && param.cx != 0 && param.cy != 0 {
+                println!("cx = {} ; cy = {}; ", param.cx, param.cy);
+                let user_data = user_data(hwnd);
+                let dpi_scale = user_data.current_dpi as f64 / BASE_DPI as f64;
+                let (width_adj, height_adj) = adjust_window_for_dpi(
+                    WIN32.get(),
+                    Size::Physical(0, 0),
+                    style_as_win32(&user_data.style),
+                    style_as_win32_ex(&user_data.style),
+                    user_data.current_dpi,
+                );
+                let new_w = param.cx - width_adj;
+                let new_h = param.cy - height_adj;
+                if new_w > 0 && new_h > 0 {
+                    user_data.push_event(Event::Resize((
+                        Size::Physical(
+                            new_w as u32,
+                            new_h as u32,
+                        ),
+                        dpi_scale,
+                    )));
+                    user_data.client_area_size.0 = new_w as u32;
+                    user_data.client_area_size.1 = new_h as u32;
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         },
 
         // Received when a key is pressed or released.

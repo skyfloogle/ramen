@@ -167,6 +167,7 @@ pub const WM_ERASEBKGND: UINT = 0x0014;
 pub const WM_SHOWWINDOW: UINT = 0x0018;
 pub const WM_ACTIVATEAPP: UINT = 0x001C;
 pub const WM_SETCURSOR: UINT = 0x0020;
+pub const WM_WINDOWPOSCHANGING: UINT = 0x0046;
 pub const WM_NCCREATE: UINT = 0x0081;
 pub const WM_NCDESTROY: UINT = 0x0082;
 pub const WM_NCLBUTTONDOWN: UINT = 0x00A1;
@@ -298,6 +299,17 @@ pub struct IMAGE_DOS_HEADER {
     e_oeminfo: WORD,
     e_res2: [WORD; 10],
     e_lfanew: LONG,
+}
+
+#[repr(C)]
+pub struct WINDOWPOS {
+    pub hwnd: HWND,
+    pub hwndInsertAfter: HWND,
+    pub x: c_int,
+    pub y: c_int,
+    pub cx: c_int,
+    pub cy: c_int,
+    pub flags: UINT,
 }
 
 // Static Linked Functions
