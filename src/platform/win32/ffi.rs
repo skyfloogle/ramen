@@ -312,6 +312,16 @@ pub struct WINDOWPOS {
     pub flags: UINT,
 }
 
+#[repr(C)]
+pub struct PAINTSTRUCT {
+    hdc: HDC,
+    fErase: BOOL,
+    rcPaint: RECT,
+    fRestore: BOOL,
+    fIncUpdate: BOOL,
+    rgbReserved: [BYTE; 32],
+}
+
 // Static Linked Functions
 #[link(name = "kernel32")]
 extern "system" {
@@ -410,6 +420,9 @@ extern "system" {
     pub fn GetWindowLongPtrW(hWnd: HWND, nIndex: c_int) -> LONG_PTR;
     #[cfg(target_pointer_width = "64")]
     pub fn SetWindowLongPtrW(hWnd: HWND, nIndex: c_int, dwNewLong: LONG_PTR) -> LONG_PTR;
+
+    pub fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HDC;
+    pub fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> BOOL;
 }
 
 #[inline]
