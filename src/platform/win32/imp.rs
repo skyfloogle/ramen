@@ -1054,7 +1054,12 @@ unsafe extern "system" fn window_proc(
 
         // Received when a system function says we should repaint some of the window.
         // Since we don't care about Win32, we just ignore this. Return 0.
-        WM_PAINT => 0,
+        WM_PAINT => {
+            let mut ps = std::mem::zeroed();
+            let _ = BeginPaint(hwnd, &mut ps);
+            let _ = EndPaint(hwnd, &ps);
+            0
+        },
 
         // Received when a window is requested to close.
         // wParam & lParam are unused. Return 0.
