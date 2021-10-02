@@ -313,7 +313,7 @@ pub struct WINDOWPOS {
 }
 
 // Static Linked Functions
-#[link(name = "Kernel32")]
+#[link(name = "kernel32")]
 extern "system" {
     pub fn GetLastError() -> DWORD;
     pub fn SetLastError(dwErrCode: DWORD);
@@ -331,7 +331,7 @@ extern "system" {
     pub fn LoadLibraryExA(lpLibFileName: *const CHAR, hFile: HANDLE, dwFlags: DWORD) -> HMODULE;
     pub fn VerSetConditionMask(ConditionMask: c_ulonglong, TypeMask: DWORD, Condition: BYTE) -> c_ulonglong;
 }
-#[link(name = "User32")]
+#[link(name = "user32")]
 extern "system" {
     // Window class management
     pub fn GetClassInfoExW(hinst: HINSTANCE, lpszClass: *const WCHAR, lpwcx: *mut WNDCLASSEXW) -> BOOL;
