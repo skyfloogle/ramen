@@ -242,6 +242,16 @@ impl Window {
         self.0.set_maximized_async(maximized)
     }
 
+    #[inline]
+    pub fn set_borderless(&self, borderless: bool) {
+        self.0.set_borderless(borderless)
+    }
+
+    #[inline]
+    pub fn set_borderless_async(&self, borderless: bool) {
+        self.0.set_borderless_async(borderless)
+    }
+
     /// Sets whether the window is resizable by dragging the edges.
     #[inline]
     pub fn set_resizable(&self, resizable: bool) {

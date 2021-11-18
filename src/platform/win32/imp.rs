@@ -49,6 +49,7 @@ const RAMEN_WM_SETINNERSIZE:  UINT = WM_USER + 8;
 const RAMEN_WM_GETINNERSIZE:  UINT = WM_USER + 9;
 const RAMEN_WM_ISDPILOGICAL:  UINT = WM_USER + 10;
 const RAMEN_WM_SETMAXIMIZED:  UINT = WM_USER + 11;
+const RAMEN_WM_SETBORDERLESS: UINT = WM_USER + 12;
 
 /// Retrieves the base module [`HINSTANCE`].
 #[inline]
@@ -716,6 +717,20 @@ impl WindowImpl {
     pub fn set_resizable_async(&self, resizable: bool) {
         unsafe {
             let _ = PostMessageW(self.hwnd, RAMEN_WM_SETTHICKFRAME, resizable as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_borderless(&self, borderless: bool) {
+        unsafe {
+            let _ = SendMessageW(self.hwnd, RAMEN_WM_SETBORDERLESS, borderless as WPARAM, 0);
+        }
+    }
+
+    #[inline]
+    pub fn set_borderless_async(&self, borderless: bool) {
+        unsafe {
+            let _ = PostMessageW(self.hwnd, RAMEN_WM_SETBORDERLESS, borderless as WPARAM, 0);
         }
     }
 
@@ -1403,6 +1418,16 @@ unsafe extern "system" fn window_proc(
             }
             0
         },
+
+        RAMEN_WM_SETBORDERLESS => {
+            let mut user_data = user_data(hwnd);
+            let borderless = wparam != 0;
+            if user_data.style.borderless != borderless {
+                user_data.style.borderless = borderless;
+                update_window_style(hwnd, &user_data.style);
+            }
+            0
+        }
 
         // Custom event: Set the inner size.
         // wParam: Unused, set to zero.
